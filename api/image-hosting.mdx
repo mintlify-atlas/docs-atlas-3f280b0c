@@ -7,7 +7,7 @@ description: "REST API for ZPan image hosting. Upload images via multipart POST,
 ZPan includes a dedicated image hosting service that stores images in your S3-compatible storage backend and serves them at stable public URLs. It is compatible with tools like PicGo, ShareX, and uPic. Images are served at short redirect URLs using an opaque token; an optional custom domain can be configured to serve images from your own hostname.
 
 <Note>
-  Image hosting must be enabled before these endpoints can be used. If image hosting is not enabled for your workspace, all image endpoints return `403 Forbidden`. Enable it via `PUT /api/ihost/config`.
+  Image hosting must be enabled before these endpoints can be used. If image hosting is not enabled for your workspace, all image endpoints return `403 Forbidden`. Enable it via `PUT /api/image-hosting/config`.
 </Note>
 
 ## Supported Formats
@@ -81,7 +81,7 @@ Accepted MIME types: `image/png`, `image/jpeg`, `image/gif`, `image/webp`. Maxim
 ## Upload Image (Tool-Compatible Endpoint)
 
 ```
-POST /api/ihost/images
+POST /api/image-hosting/images
 ```
 
 Uploads an image directly in one request. This endpoint accepts both `multipart/form-data` (PicGo, ShareX, uPic) and `application/json` with a base64-encoded `file` field (uPic JSON mode). Scope: `images:upload`.
@@ -91,20 +91,20 @@ Uploads an image directly in one request. This endpoint accepts both `multipart/
 </ParamField>
 
 <ParamField body="path" type="string">
-  Optional destination path within the image hosting storage. Supports template variables like `{year}`, `{month}`, and `{fileName}`. If omitted, ZPan derives a path from the filename and upload timestamp.
+  Optional destination path within the image hosting storage. If omitted, ZPan derives a path from the filename.
 </ParamField>
 
 <CodeGroup>
 
 ```bash Multipart upload
-curl -X POST https://your-zpan.example/api/ihost/images \
+curl -X POST https://your-zpan.example/api/image-hosting/images \
   -H 'Authorization: Bearer zpk_...' \
   -F 'file=@screenshot.png' \
   -F 'path=screenshots/2024/01/screenshot.png'
 ```
 
 ```bash JSON base64 upload
-curl -X POST https://your-zpan.example/api/ihost/images \
+curl -X POST https://your-zpan.example/api/image-hosting/images \
   -H 'Authorization: Bearer zpk_...' \
   -H 'Content-Type: application/json' \
   -d '{
@@ -120,11 +120,11 @@ curl -X POST https://your-zpan.example/api/ihost/images \
 ```json
 {
   "data": {
-    "url": "https://your-zpan.example/ih/abc123.png",
+    "url": "https://your-zpan.example/r/abc123.png",
     "urlAlt": "https://your-zpan.example/r/abc123.png",
-    "markdown": "![](https://your-zpan.example/ih/abc123.png)",
-    "html": "<img src=\"https://your-zpan.example/ih/abc123.png\" />",
-    "bbcode": "[img]https://your-zpan.example/ih/abc123.png[/img]"
+    "markdown": "![](https://your-zpan.example/r/abc123.png)",
+    "html": "<img src=\"https://your-zpan.example/r/abc123.png\" />",
+    "bbcode": "[img]https://your-zpan.example/r/abc123.png[/img]"
   }
 }
 ```
@@ -138,7 +138,7 @@ curl -X POST https://your-zpan.example/api/ihost/images \
 ## Presign Image Upload
 
 ```
-POST /api/ihost/images/presign
+POST /api/image-hosting/images/presign
 ```
 
 Creates an image draft and returns a presigned PUT URL for direct upload to storage. This is the two-step alternative to the single-request endpoint above. Scope: `images:create`.
@@ -167,14 +167,14 @@ Creates an image draft and returns a presigned PUT URL for direct upload to stor
 }
 ```
 
-After PUTting the image bytes to `uploadUrl`, confirm the image with `PUT /api/ihost/images/{id}/status`.
+After PUTting the image bytes to `uploadUrl`, confirm the image with `PUT /api/image-hosting/images/{id}/status`.
 
 ---
 
 ## Confirm Image Upload
 
 ```
-PUT /api/ihost/images/{id}/status
+PUT /api/image-hosting/images/{id}/status
 ```
 
 Confirms an image draft after the presigned PUT has completed. The image transitions from `draft` to `active` status. Scope: `images:update`.
@@ -190,7 +190,7 @@ Confirms an image draft after the presigned PUT has completed. The image transit
 ## List Hosted Images
 
 ```
-GET /api/ihost/images
+GET /api/image-hosting/images
 ```
 
 Returns a cursor-paged list of active hosted images for the current workspace. Scope: `images:read`.
@@ -211,7 +211,7 @@ Returns a cursor-paged list of active hosted images for the current workspace. S
 
 ```bash curl
 curl -H 'Authorization: Bearer zpk_...' \
-  'https://your-zpan.example/api/ihost/images?pageSize=20'
+  'https://your-zpan.example/api/image-hosting/images?pageSize=20'
 ```
 
 </CodeGroup>
@@ -221,7 +221,7 @@ curl -H 'Authorization: Bearer zpk_...' \
 ## Get Hosted Image
 
 ```
-GET /api/ihost/images/{id}
+GET /api/image-hosting/images/{id}
 ```
 
 Returns a single hosted image record. Scope: `images:read`.
@@ -235,7 +235,7 @@ Returns a single hosted image record. Scope: `images:read`.
 ## Delete Hosted Image
 
 ```
-DELETE /api/ihost/images/{id}
+DELETE /api/image-hosting/images/{id}
 ```
 
 Deletes a hosted image from both the database and storage. Scope: `images:delete`.
@@ -251,7 +251,7 @@ Deletes a hosted image from both the database and storage. Scope: `images:delete
 ## Get Image Hosting Config
 
 ```
-GET /api/ihost/config
+GET /api/image-hosting/config
 ```
 
 Returns the current image hosting configuration for the workspace, including custom domain status and DNS instructions. Scope: `image-hosting-config:read`.
@@ -297,13 +297,13 @@ Returns the current image hosting configuration for the workspace, including cus
 ## Update Image Hosting Config
 
 ```
-PUT /api/ihost/config
+PUT /api/image-hosting/config
 ```
 
 Enables image hosting and optionally sets a custom domain and referer allowlist. Scope: `image-hosting-config:update`. Requires team owner role.
 
 <ParamField body="enabled" type="boolean" required>
-  Must be `true`. To disable image hosting use `DELETE /api/ihost/config`.
+  Must be `true`. To disable image hosting use `DELETE /api/image-hosting/config`.
 </ParamField>
 
 <ParamField body="customDomain" type="string | null">
@@ -319,7 +319,7 @@ Enables image hosting and optionally sets a custom domain and referer allowlist.
 ## Delete Image Hosting Config
 
 ```
-DELETE /api/ihost/config
+DELETE /api/image-hosting/config
 ```
 
 Disables image hosting for the workspace and removes the configuration. Scope: `image-hosting-config:delete`. Requires team owner role.

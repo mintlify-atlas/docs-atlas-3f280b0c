@@ -1,7 +1,7 @@
 ---
 title: "Remote Download: Queue HTTP and Torrent Downloads"
 sidebarTitle: "Remote Download"
-description: "Queue HTTP, magnet link, and BitTorrent downloads that run on a downloader worker and land directly in your ZPan storage. Deploy the downloader separately for better network access."
+description: "Queue HTTP, magnet, and torrent downloads on a worker that saves files to ZPan storage. Deploy the downloader separately for better network access."
 ---
 
 Remote Download lets you queue URLs, magnet links, and torrent files for download by a worker process that runs independently of your browser. The downloader fetches the content and uploads it directly to your S3-compatible storage, where it appears in your ZPan file manager as a regular file. You don't need to keep a browser tab open while the download runs.
@@ -15,7 +15,7 @@ The remote download system has two components: the ZPan control plane (task mana
     Create a download task via `POST /api/download-tasks` or the web UI. Provide a URL, magnet link, or torrent file and a target folder in your workspace.
   </Step>
   <Step title="Downloader picks up the task">
-    The downloader worker polls ZPan for assigned tasks. When a task is assigned, the downloader begins fetching using its configured engine (aria2 or qBittorrent).
+    The downloader worker polls ZPan for assigned tasks. When a task is assigned, the downloader begins fetching using its configured engine (aria2, qBittorrent, or auto-selected).
   </Step>
   <Step title="Content is uploaded to S3">
     After download completes, the downloader uploads the file to S3 using ZPan's standard presigned upload protocol. It creates an object draft, PUTs the bytes directly to your bucket, and completes the upload session.
@@ -35,11 +35,12 @@ The remote download system has two components: the ZPan control plane (task mana
 
 ## Downloader Engines
 
-The downloader worker supports two download engines:
+The downloader worker supports the following engine modes:
 
 | Engine | Description | Best for |
 |---|---|---|
-| `aria2` | Default. Lightweight daemon supporting HTTP, HTTPS, and BitTorrent | Most use cases |
+| `auto` | Default. Tries aria2 first, falls back to qBittorrent | Most use cases |
+| `aria2` | Lightweight daemon supporting HTTP, HTTPS, and BitTorrent | Simple HTTP and torrent downloads |
 | `qbittorrent` | Full-featured BitTorrent client with seeding support | Advanced torrent workflows |
 
 Set the engine with the `ZPAN_DOWNLOADER_ENGINE` environment variable.
@@ -79,15 +80,15 @@ Visit that URL in a browser logged into ZPan as an admin to authorize the downlo
 | Variable | Description | Default |
 |---|---|---|
 | `ZPAN_SERVER_URL` | URL of the ZPan control plane | Required |
-| `ZPAN_DOWNLOADER_ENGINE` | Download engine: `aria2` or `qbittorrent` | `aria2` |
+| `ZPAN_DOWNLOADER_ENGINE` | Download engine: `auto`, `aria2`, or `qbittorrent` | `auto` |
 | `ZPAN_DOWNLOADER_BT_LISTEN_PORT` | TCP/UDP port for BitTorrent peer connections | Engine default |
-| `ZPAN_DOWNLOADER_SEED_CACHE_LIMIT` | Number of completed torrents to keep seeding before pruning | Engine default |
+| `ZPAN_DOWNLOADER_SEED_CACHE_LIMIT` | Total size of completed torrent files to retain for seeding (e.g. `10GB`); oldest seeds are pruned first | Engine default |
 
 ## BitTorrent Configuration
 
 For BitTorrent downloads to work correctly, the port specified in `ZPAN_DOWNLOADER_BT_LISTEN_PORT` must be reachable from the internet (or your local network, for private torrents). Open the port in your firewall and NAT rules as needed.
 
-When `ZPAN_DOWNLOADER_SEED_CACHE_LIMIT` is set, the downloader keeps that many recently completed torrents in a seeding state before automatically removing the oldest from the seeding queue (the uploaded file in ZPan is not affected — seeding status only controls whether the downloader continues sharing the torrent).
+When `ZPAN_DOWNLOADER_SEED_CACHE_LIMIT` is set, the downloader retains completed torrent files for seeding up to that total size (e.g. `10GB`). When the cache exceeds the limit, the oldest retained seeds are pruned first. The uploaded file in ZPan is not affected — seeding status only controls whether the downloader continues sharing the torrent with peers.
 
 <Note>
   Seeding behavior depends on the configured engine. aria2 provides basic seeding; qBittorrent provides the full seeding experience including ratio targets and seeding time limits.

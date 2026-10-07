@@ -53,7 +53,7 @@ The Teams API manages collaborative workspaces. A team has a shared storage quot
 ## List Teams (Admin)
 
 ```
-GET /api/admin/teams
+GET /api/teams
 ```
 
 Returns all teams on the site. Requires the site `admin` role. Scope: `teams:read`.
@@ -62,7 +62,7 @@ Returns all teams on the site. Requires the site `admin` role. Scope: `teams:rea
 
 ```bash curl
 curl -H 'Authorization: Bearer zpk_...' \
-  https://your-zpan.example/api/admin/teams
+  https://your-zpan.example/api/teams
 ```
 
 </CodeGroup>
@@ -95,7 +95,7 @@ curl -H 'Authorization: Bearer zpk_...' \
 ## Get Team (Admin)
 
 ```
-GET /api/admin/teams/{teamId}
+GET /api/teams/{teamId}
 ```
 
 Returns a single team by ID. Requires the site `admin` role. Scope: `teams:read`.
@@ -305,15 +305,17 @@ Administrators can grant, update, and revoke storage quota entitlements for team
 ### List Entitlements
 
 ```
-GET /api/admin/teams/{teamId}/entitlements
+GET /api/teams/{teamId}/entitlements
 ```
 
 <ParamField path="teamId" type="string" required>Opaque team ID.</ParamField>
 
+Scope: `team-entitlements:read`.
+
 ### Grant Entitlement
 
 ```
-POST /api/admin/teams/{teamId}/entitlements
+POST /api/teams/{teamId}/entitlements
 ```
 
 <ParamField path="teamId" type="string" required>Opaque team ID.</ParamField>
@@ -326,18 +328,28 @@ POST /api/admin/teams/{teamId}/entitlements
 
 <ParamField body="note" type="string">Optional admin note (max 500 characters).</ParamField>
 
+Scope: `team-entitlements:create`.
+
 ### Update Entitlement
 
 ```
-PATCH /api/admin/teams/{teamId}/entitlements/{eid}
+PATCH /api/teams/{teamId}/entitlements/{eid}
 ```
 
+<ParamField path="teamId" type="string" required>Opaque team ID.</ParamField>
+
 <ParamField path="eid" type="string" required>Opaque entitlement ID.</ParamField>
+
+Scope: `team-entitlements:update`.
 
 ### Revoke Entitlement
 
 ```
-DELETE /api/admin/teams/{teamId}/entitlements/{eid}
+DELETE /api/teams/{teamId}/entitlements/{eid}
 ```
 
-**Response `204 No Content`** on success.
+<ParamField path="teamId" type="string" required>Opaque team ID.</ParamField>
+
+<ParamField path="eid" type="string" required>Opaque entitlement ID.</ParamField>
+
+Scope: `team-entitlements:delete`. **Response `204 No Content`** on success.

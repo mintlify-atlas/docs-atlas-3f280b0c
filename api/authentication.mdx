@@ -1,7 +1,7 @@
 ---
 title: "Authenticate API Requests to ZPan"
 sidebarTitle: "Authentication"
-description: "ZPan API supports Bearer API keys, session cookies, and OAuth 2.1 DPoP tokens. Create API keys in settings, pass them in the Authorization header on every request."
+description: "ZPan API supports Bearer API keys, session cookies, and OAuth 2.1 DPoP tokens. Create API keys in settings and pass them in the Authorization header."
 ---
 
 Every ZPan API request must be authenticated. The server supports three mechanisms: Bearer API keys for scripting and integrations, session cookies set automatically by the browser SPA, and OAuth 2.1 DPoP-bound tokens for external application integrations. Unauthenticated requests to protected endpoints return `401 Unauthorized`. Requests authenticated with valid credentials that lack the required scope return `403 Forbidden`.

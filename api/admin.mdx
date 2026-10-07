@@ -36,23 +36,23 @@ Storages are S3-compatible backends where ZPan stores file blobs. Multiple stora
 
 | Method | Path | Scope | Description |
 |---|---|---|---|
-| `GET` | `/api/admin/storages` | `storages:read` | List all configured storages. |
-| `POST` | `/api/admin/storages` | `storages:create` | Add a new storage backend. |
-| `GET` | `/api/admin/storages/{id}` | `storages:read` | Get a single storage. |
-| `PUT` | `/api/admin/storages/{id}` | `storages:update` | Replace a storage configuration. |
-| `PATCH` | `/api/admin/storages/{id}` | `storages:update` | Partially update a storage. |
-| `DELETE` | `/api/admin/storages/{id}` | `storages:delete` | Delete a storage (fails if files reference it). |
-| `PUT` | `/api/admin/storages/{id}/egress-billing` | `storages:update` | Update egress billing configuration. |
+| `GET` | `/api/site/storages` | `storages:read` | List all configured storages. |
+| `POST` | `/api/site/storages` | `storages:create` | Add a new storage backend. |
+| `GET` | `/api/site/storages/{id}` | `storages:read` | Get a single storage. |
+| `PUT` | `/api/site/storages/{id}` | `storages:update` | Replace a storage configuration. |
+| `PATCH` | `/api/site/storages/{id}` | `storages:update` | Partially update a storage. |
+| `DELETE` | `/api/site/storages/{id}` | `storages:delete` | Delete a storage (fails if files reference it). |
+| `PUT` | `/api/site/storages/{id}/egress-billing` | `storages:update` | Update egress billing configuration. |
 
 <CodeGroup>
 
 ```bash List storages
 curl -H 'Authorization: Bearer zpk_...' \
-  https://your-zpan.example/api/admin/storages
+  https://your-zpan.example/api/site/storages
 ```
 
 ```bash Create storage
-curl -X POST https://your-zpan.example/api/admin/storages \
+curl -X POST https://your-zpan.example/api/site/storages \
   -H 'Authorization: Bearer zpk_...' \
   -H 'Content-Type: application/json' \
   -d '{
@@ -78,17 +78,17 @@ ZPan uses better-auth for identity; the `/api/auth/admin/*` endpoints handle use
 
 | Method | Path | Scope | Description |
 |---|---|---|---|
-| `GET` | `/api/admin/users/{userId}/quota` | `users:read` | Get a user's storage usage and quota. |
-| `GET` | `/api/admin/users/{userId}/entitlements` | `user-entitlements:read` | List storage entitlements for a user. |
-| `POST` | `/api/admin/users/{userId}/entitlements` | `user-entitlements:create` | Grant a storage entitlement to a user. |
-| `PATCH` | `/api/admin/users/{userId}/entitlements/{eid}` | `user-entitlements:update` | Update a user entitlement. |
-| `DELETE` | `/api/admin/users/{userId}/entitlements/{eid}` | `user-entitlements:delete` | Revoke a user entitlement. |
+| `GET` | `/api/users/{userId}/quota` | `users:read` | Get a user's storage usage and quota. |
+| `GET` | `/api/users/{userId}/entitlements` | `user-entitlements:read` | List storage entitlements for a user. |
+| `POST` | `/api/users/{userId}/entitlements` | `user-entitlements:create` | Grant a storage entitlement to a user. |
+| `PATCH` | `/api/users/{userId}/entitlements/{eid}` | `user-entitlements:update` | Update a user entitlement. |
+| `DELETE` | `/api/users/{userId}/entitlements/{eid}` | `user-entitlements:delete` | Revoke a user entitlement. |
 
 <CodeGroup>
 
 ```bash Get user quota
 curl -H 'Authorization: Bearer zpk_...' \
-  https://your-zpan.example/api/admin/users/01HQ.../quota
+  https://your-zpan.example/api/users/01HQ.../quota
 ```
 
 </CodeGroup>
@@ -111,19 +111,19 @@ Site settings control the public identity, registration mode, default quotas, an
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/api/admin/settings` | Get all editable site settings. |
-| `PUT` | `/api/admin/settings/identity` | Update site name, public URL, announcement text, and logo. |
-| `PUT` | `/api/admin/settings/registration` | Update registration mode (open, invite-only, closed). |
-| `PUT` | `/api/admin/settings/quotas` | Update default storage and traffic quotas for new users. |
-| `PUT` | `/api/admin/settings/captcha` | Configure CAPTCHA provider (Cloudflare Turnstile, etc.). |
-| `PUT` | `/api/admin/settings/webdav` | Configure WebDAV hostname and settings. |
-| `POST` | `/api/admin/settings/webdav/verifications` | Verify the configured WebDAV domain. |
+| `GET` | `/api/site/settings` | Get all editable site settings. |
+| `PUT` | `/api/site/settings/identity` | Update site name, public URL, announcement text, and logo. |
+| `PUT` | `/api/site/settings/registration` | Update registration mode (open, invite-only, closed). |
+| `PUT` | `/api/site/settings/quotas` | Update default storage and traffic quotas for new users. |
+| `PUT` | `/api/site/settings/captcha` | Configure CAPTCHA provider (Cloudflare Turnstile, etc.). |
+| `PUT` | `/api/site/settings/webdav` | Configure WebDAV hostname and settings. |
+| `POST` | `/api/site/settings/webdav/verifications` | Verify the configured WebDAV domain. |
 
 <CodeGroup>
 
 ```bash Get site settings
 curl -H 'Authorization: Bearer zpk_...' \
-  https://your-zpan.example/api/admin/settings
+  https://your-zpan.example/api/site/settings
 ```
 
 </CodeGroup>
@@ -136,9 +136,9 @@ Configure social and OIDC login providers. Scope: `auth-providers:read` / `auth-
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/api/admin/auth-providers` | List configured auth providers and their status. |
-| `PUT` | `/api/admin/auth-providers/{provider}` | Enable or update a provider (GitHub, Google, OIDC). |
-| `DELETE` | `/api/admin/auth-providers/{provider}` | Disable a provider. |
+| `GET` | `/api/site/auth-providers` | List configured auth providers and their status. |
+| `PUT` | `/api/site/auth-providers/{providerId}` | Enable or update a provider (GitHub, Google, OIDC). |
+| `DELETE` | `/api/site/auth-providers/{providerId}` | Disable a provider. |
 
 ---
 
@@ -148,14 +148,14 @@ Configure SMTP or Cloudflare Email Workers for transactional email. Scope: `emai
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/api/admin/email-config` | Get current email configuration. |
-| `PUT` | `/api/admin/email-config` | Update SMTP or Cloudflare Email Workers settings. |
-| `POST` | `/api/admin/email-config/test` | Send a test email to verify the configuration. |
+| `GET` | `/api/site/settings/email` | Get current email configuration. |
+| `PUT` | `/api/site/settings/email` | Update SMTP or Cloudflare Email Workers settings. |
+| `POST` | `/api/site/settings/email/test-messages` | Send a test email to verify the configuration. |
 
 <CodeGroup>
 
 ```bash Send test email
-curl -X POST https://your-zpan.example/api/admin/email-config/test \
+curl -X POST https://your-zpan.example/api/site/settings/email/test-messages \
   -H 'Authorization: Bearer zpk_...' \
   -H 'Content-Type: application/json' \
   -d '{"to": "admin@example.com"}'
@@ -171,8 +171,7 @@ Retrieve license and entitlement information for the ZPan instance. Scope: `lice
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/api/admin/licensing` | Get current license status, plan name, and feature entitlements. |
-| `POST` | `/api/internal/licensing/refresh-runs` | Trigger a background refresh of license state from the ZPan Cloud licensing service. |
+| `GET` | `/api/site/licensing` | Get current license status, plan name, and feature entitlements. |
 
 ---
 
@@ -183,7 +182,7 @@ Overview and time-series analytics for the ZPan instance dashboard. All analytic
 ### Site Overview
 
 ```
-GET /api/admin/overview
+GET /api/site/analytics
 ```
 
 Returns high-level site metrics: total users, total storage used, active objects, and share counts.
@@ -192,20 +191,12 @@ Returns high-level site metrics: total users, total storage used, active objects
 
 ```bash curl
 curl -H 'Authorization: Bearer zpk_...' \
-  https://your-zpan.example/api/admin/overview
+  https://your-zpan.example/api/site/analytics
 ```
 
 </CodeGroup>
 
 **Response `200`** — `adminOverviewSchema` object containing aggregate counts across all users and workspaces.
-
-### Site Stats
-
-```
-GET /api/admin/stats
-```
-
-Returns time-series data for the analytics dashboard charts: user growth, storage growth, traffic (bytes transferred), and sharing activity.
 
 ---
 
@@ -214,7 +205,7 @@ Returns time-series data for the analytics dashboard charts: user growth, storag
 The audit log records all significant actions performed on the site. Scope: `audit-events:read`.
 
 ```
-GET /api/admin/audit
+GET /api/site/audit-events
 ```
 
 <ParamField query="page" type="integer">Page number (1-indexed).</ParamField>
@@ -230,10 +221,10 @@ Manage site-wide banner announcements shown to all users. Scope: `announcements:
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/api/admin/announcements` | List all announcements. |
-| `POST` | `/api/admin/announcements` | Create a new announcement. |
-| `PATCH` | `/api/admin/announcements/{id}` | Update announcement content or status. |
-| `DELETE` | `/api/admin/announcements/{id}` | Delete an announcement. |
+| `GET` | `/api/site/announcements` | List all announcements. |
+| `POST` | `/api/site/announcements` | Create a new announcement. |
+| `PATCH` | `/api/site/announcements/{id}` | Update announcement content or status. |
+| `DELETE` | `/api/site/announcements/{id}` | Delete an announcement. |
 
 ---
 
@@ -243,9 +234,9 @@ Configure the DNS provider used for custom image hosting domain verification. Sc
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/api/admin/image-domain-provider` | Get the current DNS provider configuration. |
-| `PUT` | `/api/admin/image-domain-provider` | Set provider to `manual` or `cloudflare`, with provider-specific settings. |
-| `POST` | `/api/admin/image-domain-provider/test` | Test the DNS provider credentials. |
+| `GET` | `/api/site/settings/image-domains` | Get the current DNS provider configuration. |
+| `PUT` | `/api/site/settings/image-domains` | Set provider to `manual` or `cloudflare`, with provider-specific settings. |
+| `POST` | `/api/site/settings/image-domains/tests` | Test the DNS provider credentials. |
 
 ---
 
@@ -255,9 +246,9 @@ When registration is set to invite-only, users must have a valid invite code to 
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/api/admin/invite-codes` | List all invite codes and their usage status. |
-| `POST` | `/api/admin/invite-codes` | Generate one or more invite codes. |
-| `DELETE` | `/api/admin/invite-codes/{id}` | Delete an invite code. |
+| `GET` | `/api/site/invite-codes` | List all invite codes and their usage status. |
+| `POST` | `/api/site/invite-codes` | Generate one or more invite codes. |
+| `DELETE` | `/api/site/invite-codes/{id}` | Delete an invite code. |
 
 ---
 
@@ -266,7 +257,7 @@ When registration is set to invite-only, users must have a valid invite code to 
 Background jobs handle asynchronous tasks such as archive compression and extraction. Scope: `background-jobs:read`.
 
 ```
-GET /api/admin/background-jobs
+GET /api/background-jobs
 ```
 
 Returns a list of recent background job executions with their status, type, and timing information.
@@ -276,7 +267,7 @@ Returns a list of recent background job executions with their status, type, and 
 ## Quota Overview
 
 ```
-GET /api/admin/quotas
+GET /api/quotas
 ```
 
 Returns an overview of storage quota usage across all workspaces (personal and team). Scope: `quota:read`. Requires site `admin` role.

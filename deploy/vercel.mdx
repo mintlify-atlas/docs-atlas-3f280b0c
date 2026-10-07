@@ -1,7 +1,7 @@
 ---
-title: "Deploy ZPan on Vercel with Node.js Functions"
+title: "Deploy ZPan on Vercel with Turso and Node.js Functions"
 sidebarTitle: "Vercel"
-description: "Deploy ZPan to Vercel using Node.js Functions and Turso as the database. The React SPA is served from Vercel's CDN with API routes handled by a Hono function."
+description: "Deploy ZPan to Vercel using Node.js Functions and Turso. The React SPA is served from Vercel CDN; API routes are handled by a single Hono function."
 ---
 
 ZPan supports Vercel as a first-class deployment target. The React SPA is served from Vercel's global CDN, while all API traffic is handled by a single Hono function running on the Node.js 22 runtime. [Turso](https://turso.tech) provides the libSQL-compatible remote database, and any S3-compatible bucket handles file storage.

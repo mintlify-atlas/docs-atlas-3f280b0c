@@ -216,6 +216,7 @@ curl -X POST https://your-zpan.example/api/objects \
     "expiresAt": "2024-03-01T11:00:00Z",
     "presignedExpiresAt": "2024-03-01T10:15:00Z",
     "requiredHeaders": {},
+    "urls": ["https://s3.example.com/..."],
     "parts": [
       {
         "partNumber": 1,
@@ -226,7 +227,7 @@ curl -X POST https://your-zpan.example/api/objects \
         "length": 1024
       }
     ],
-    "workflow": { "version": "1", "..." : "..." }
+    "workflow": { "version": "1" }
   }
 }
 ```
@@ -238,10 +239,10 @@ File bytes go directly to S3-compatible storage and never traverse ZPan. After c
 **Step 1 — PUT each part to its presigned URL.**
 The `upload.parts` array describes exactly which byte range (`offset`, `length`) to send to which `url`. Apply the `headers` object from each part as additional request headers. Capture the `ETag` response header from each PUT response.
 
-**Step 2 — If presigned URLs expire before upload completes**, call `POST /api/objects/{id}/uploads/{sessionId}/parts` with the missing `partNumbers` to receive fresh URLs. Re-signing does not change the upload session, storage key, or multipart upload identity.
+**Step 2 — If presigned URLs expire before upload completes**, call `POST /api/objects/{id}/uploads/{uploadSessionId}/parts` with the missing `partNumbers` to receive fresh URLs. Re-signing does not change the upload session, storage key, or multipart upload identity.
 
 **Step 3 — Complete the upload.**
-Call `POST /api/objects/{id}/uploads/{sessionId}/completions` with one `{partNumber, etag}` record per part. The file becomes `active` once the server confirms all parts.
+Call `POST /api/objects/{id}/uploads/{uploadSessionId}/completions` with one `{partNumber, etag}` record per part. The file becomes `active` once the server confirms all parts.
 
 <Warning>
   You must supply exactly `upload.partCount` records when completing the upload. Missing, duplicate, or out-of-range part numbers are rejected.

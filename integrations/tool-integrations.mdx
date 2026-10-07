@@ -1,5 +1,5 @@
 ---
-title: "Integrate Screenshot and Upload Tools with ZPan"
+title: "Connect Screenshot and Upload Tools to ZPan Image Hosting"
 sidebarTitle: "Tool Integrations"
 description: "Connect PicGo, PicList, uPic, ShareX, and Flameshot to ZPan image hosting. Generate configuration from the Tool Integration panel using your API key."
 ---
@@ -78,7 +78,7 @@ If you prefer to fill in each field by hand, use the following values:
 
 | Field | Value |
 |---|---|
-| API URL | `https://<your-zpan-host>/api/ihost/images` |
+| API URL | `https://<host>/api/ihost/images` |
 | File Form Key | `file` |
 | Authorization Header | `Bearer <your-key>` |
 | Response Field | `data.url` |
@@ -107,7 +107,7 @@ The downloaded `.sxcu` file contains:
   "Name": "ZPan Image Host",
   "DestinationType": "ImageUploader, FileUploader",
   "RequestMethod": "POST",
-  "RequestURL": "https://<your-zpan-host>/api/ihost/images",
+  "RequestURL": "https://<host>/api/ihost/images",
   "Headers": { "Authorization": "Bearer <your-key>" },
   "Body": "MultipartFormData",
   "FileFormName": "file",
@@ -160,7 +160,7 @@ flameshot gui --raw | curl \
   -H "Authorization: Bearer $IHOST_KEY" \
   -F "file=@-" \
   -F "path=screenshots/$(date +%Y/%m)/$(date +%s).png" \
-  https://<your-zpan-host>/api/ihost/images \
+  https://<host>/api/ihost/images \
   | jq -r '.data.url' | xclip -selection clipboard
 ```
 

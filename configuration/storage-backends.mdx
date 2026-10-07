@@ -1,7 +1,7 @@
 ---
-title: "Configure S3-Compatible Storage Backends in ZPan"
+title: "Connect and Configure S3-Compatible Storage in ZPan"
 sidebarTitle: "Storage Backends"
-description: "Connect ZPan to any S3-compatible storage bucket. Supports Cloudflare R2, AWS S3, Backblaze B2, MinIO, RustFS, Tigris, and any S3-protocol-compatible service."
+description: "Connect ZPan to any S3-compatible bucket. Supports Cloudflare R2, AWS S3, Backblaze B2, MinIO, RustFS, Tigris, and any S3-protocol-compatible service."
 ---
 
 ZPan stores no files itself. Every file upload travels directly from the user's browser to your object storage bucket via a presigned URL that ZPan generates. This means your storage backend must be reachable from the browser, not just from the ZPan server. You can configure one or more backends; each workspace or user can be assigned to a different storage backend by the administrator.

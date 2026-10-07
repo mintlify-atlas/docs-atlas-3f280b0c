@@ -59,10 +59,10 @@ This verification works the same way for Docker, Lambda, Vercel, Netlify, Azure,
 
 ### Credentials
 
-Use the same username and password as your ZPan web UI login. WebDAV authenticates via HTTP Basic Auth; credentials are validated against the API key and user database, not passed through in plaintext.
+WebDAV uses HTTP Basic Auth with your ZPan **username** (not email) as the username and a dedicated **WebDAV API key** as the password. The key is generated automatically when you first enable WebDAV access, or you can create one manually under **Settings → API Keys → WebDAV**. Your regular web UI password is not accepted.
 
 <Warning>
-  Always use HTTPS when connecting WebDAV clients. Sending Basic Auth credentials over HTTP exposes your password in plaintext.
+  Always use HTTPS when connecting WebDAV clients. Sending Basic Auth credentials over plain HTTP exposes your API key.
 </Warning>
 
 ### macOS Finder
@@ -82,7 +82,7 @@ Use the same username and password as your ZPan web UI login. WebDAV authenticat
     ```
   </Step>
   <Step title="Authenticate">
-    Enter your ZPan username and password when prompted. Choose whether to save credentials in the keychain.
+    Enter your ZPan username and WebDAV API key when prompted. Choose whether to save credentials in the keychain.
   </Step>
 </Steps>
 
@@ -100,7 +100,7 @@ Use the same username and password as your ZPan web UI login. WebDAV authenticat
     Check **Connect using different credentials**.
   </Step>
   <Step title="Enter credentials">
-    Enter your ZPan username and password.
+    Enter your ZPan username and WebDAV API key as the password.
   </Step>
 </Steps>
 
@@ -119,13 +119,13 @@ sudo apt install davfs2
 # Mount ZPan WebDAV
 sudo mount -t davfs https://your-zpan.example/dav/ /mnt/zpan
 
-# Enter your ZPan username and password when prompted
+# Enter your ZPan username and WebDAV API key when prompted
 ```
 
 For persistent mounts, add credentials to `/etc/davfs2/secrets`:
 
 ```
-https://your-zpan.example/dav/ your-username your-password
+https://your-zpan.example/dav/ your-username your-webdav-api-key
 ```
 
 ## Cloudflare Workers: Dedicated Hostname Setup

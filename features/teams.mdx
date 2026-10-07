@@ -34,7 +34,7 @@ The key principle: **a space owns its data.** Usage is always charged to the spa
 
 ## Member Roles
 
-Teams support two member roles:
+Teams support three member roles:
 
 | Role | Permissions |
 |---|---|
@@ -117,16 +117,15 @@ Team operations require the following authorization scopes:
 
 | Scope | Operations |
 |---|---|
-| `teams:read` | List teams, get team details, list activity |
-| `teams:create` | Create teams, create invite links, join teams |
+| `teams:read` | List teams, get team details, list team activity |
 | `teams:update` | Update team settings, set/delete team logo |
-| `team_invitations:read` | List pending invitations |
-| `team_invitations:create` | Create invite links |
-| `team_members:create` | Join a team (accept an invite link) |
-| `team_entitlements:read` | List quota entitlements (admin) |
-| `team_entitlements:create` | Grant quota entitlements (admin) |
-| `team_entitlements:update` | Modify quota entitlements (admin) |
-| `team_entitlements:delete` | Revoke quota entitlements (admin) |
+| `team-invitations:read` | List pending invitations |
+| `team-invitations:create` | Create invite links |
+| `team-members:create` | Join a team (accept an invite link) |
+| `team-entitlements:read` | List quota entitlements (admin) |
+| `team-entitlements:create` | Grant quota entitlements (admin) |
+| `team-entitlements:update` | Modify quota entitlements (admin) |
+| `team-entitlements:delete` | Revoke quota entitlements (admin) |
 
 ## Team Activity Log
 

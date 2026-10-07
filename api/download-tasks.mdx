@@ -40,7 +40,7 @@ The Download Tasks API lets you queue remote files for download directly into yo
 ## List Download Tasks
 
 ```
-GET /api/downloads
+GET /api/downloads/tasks
 ```
 
 Returns a cursor-paged list of download tasks for the current workspace. Scope: `download-tasks:read`.
@@ -69,7 +69,7 @@ Returns a cursor-paged list of download tasks for the current workspace. Scope: 
 
 ```bash curl
 curl -H 'Authorization: Bearer zpk_...' \
-  'https://your-zpan.example/api/downloads?status=queued,downloading'
+  'https://your-zpan.example/api/downloads/tasks?status=queued,downloading'
 ```
 
 </CodeGroup>
@@ -106,7 +106,7 @@ curl -H 'Authorization: Bearer zpk_...' \
 ## Create Download Task
 
 ```
-POST /api/downloads
+POST /api/downloads/tasks
 ```
 
 Queues a new remote download. The task enters `queued` status and is assigned to an available downloader agent. Scope: `download-tasks:create`.
@@ -142,7 +142,7 @@ Queues a new remote download. The task enters `queued` status and is assigned to
 <CodeGroup>
 
 ```bash HTTP download
-curl -X POST https://your-zpan.example/api/downloads \
+curl -X POST https://your-zpan.example/api/downloads/tasks \
   -H 'Authorization: Bearer zpk_...' \
   -H 'Content-Type: application/json' \
   -d '{
@@ -152,7 +152,7 @@ curl -X POST https://your-zpan.example/api/downloads \
 ```
 
 ```bash Magnet link
-curl -X POST https://your-zpan.example/api/downloads \
+curl -X POST https://your-zpan.example/api/downloads/tasks \
   -H 'Authorization: Bearer zpk_...' \
   -H 'Content-Type: application/json' \
   -d '{
@@ -174,7 +174,7 @@ curl -X POST https://your-zpan.example/api/downloads \
 ## Get Download Task
 
 ```
-GET /api/downloads/{id}
+GET /api/downloads/tasks/{id}
 ```
 
 Returns the full state of a single download task, including real-time progress, assignment, billing, and any error information. Scope: `download-tasks:read`.
@@ -190,7 +190,7 @@ Returns the full state of a single download task, including real-time progress, 
 ## Get Task Timeline
 
 ```
-GET /api/downloads/{id}/events
+GET /api/downloads/tasks/{id}/events
 ```
 
 Returns a chronological timeline of status transitions and events for a task. Useful for diagnosing failures. Scope: `download-tasks:read`.
@@ -224,7 +224,7 @@ Returns a chronological timeline of status transitions and events for a task. Us
 ## Pause, Resume, or Cancel a Task
 
 ```
-PUT /api/downloads/{id}/status
+PUT /api/downloads/tasks/{id}/status
 ```
 
 Changes the status of an active task. Scope: `download-tasks:cancel`.
@@ -240,14 +240,14 @@ Changes the status of an active task. Scope: `download-tasks:cancel`.
 <CodeGroup>
 
 ```bash Pause
-curl -X PUT https://your-zpan.example/api/downloads/01HQ.../status \
+curl -X PUT https://your-zpan.example/api/downloads/tasks/01HQ.../status \
   -H 'Authorization: Bearer zpk_...' \
   -H 'Content-Type: application/json' \
   -d '{"status": "paused"}'
 ```
 
 ```bash Cancel
-curl -X PUT https://your-zpan.example/api/downloads/01HQ.../status \
+curl -X PUT https://your-zpan.example/api/downloads/tasks/01HQ.../status \
   -H 'Authorization: Bearer zpk_...' \
   -H 'Content-Type: application/json' \
   -d '{"status": "canceled"}'
@@ -262,7 +262,7 @@ curl -X PUT https://your-zpan.example/api/downloads/01HQ.../status \
 ## Retry or Restart a Task
 
 ```
-POST /api/downloads/{id}/attempts
+POST /api/downloads/tasks/{id}/attempts
 ```
 
 Starts a new attempt for a failed or canceled task. Scope: `download-tasks:cancel`.
@@ -282,7 +282,7 @@ Starts a new attempt for a failed or canceled task. Scope: `download-tasks:cance
 ## Delete Download Task
 
 ```
-DELETE /api/downloads/{id}
+DELETE /api/downloads/tasks/{id}
 ```
 
 Permanently deletes a download task and its history. Only completed, failed, or canceled tasks can be deleted. Scope: `download-tasks:cancel`.
@@ -300,18 +300,27 @@ Permanently deletes a download task and its history. Only completed, failed, or 
 For live progress updates without polling, subscribe to the server-sent events stream:
 
 ```
-GET /api/events?downloadTasks=1
+GET /api/events
 ```
 
-The stream emits task state change events as they occur. Requires an authenticated session with the `download-tasks:read` scope on the API key.
+The stream multiplexes several event domains via named SSE events. Requires an authenticated session; workspace-scoped API keys require the `download-tasks:read` scope and receive only download-task change events plus heartbeat and error control frames.
 
 <CodeGroup>
 
 ```bash curl
 curl -H 'Authorization: Bearer zpk_...' \
-  'https://your-zpan.example/api/events?downloadTasks=1'
+  'https://your-zpan.example/api/events'
 ```
 
 </CodeGroup>
 
-Each event is a JSON object with the updated task state. The connection remains open until closed by the client.
+Events are delivered as named SSE frames:
+
+| Event name | Payload | Description |
+|---|---|---|
+| `resource-change` | `{ sequence, resourceType, resourceId, changeType, action, metadata, occurredAt }` | A resource was created, updated, or deleted. |
+| `resync` | `{ sequence }` | Resume cursor is stale; invalidate active queries and refetch. |
+| `heartbeat` | `{ at }` | Keep-alive emitted when nothing has changed for a while. |
+| `error` | `{ message }` | A domain query failed on the server side. |
+
+The connection remains open until closed by the client. Use the `Last-Event-ID` header to resume from a known sequence number after a reconnect.

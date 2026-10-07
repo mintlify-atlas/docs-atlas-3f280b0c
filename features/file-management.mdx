@@ -1,7 +1,7 @@
 ---
 title: "File Management: S3-Backed Web Drive in ZPan"
 sidebarTitle: "File Management"
-description: "Manage files and folders with ZPan's web UI. Uploads go directly from browser to S3 via presigned URLs. Supports previews, trash, multi-part uploads, and folder navigation."
+description: "Manage files stored in your S3 bucket with ZPan's web drive. Uploads go directly to S3 via presigned URLs. Supports previews, trash, and multipart uploads."
 ---
 
 ZPan's file manager is a full-featured web drive built on top of S3-compatible object storage. Every file's bytes live in your bucket; ZPan only stores metadata in its database and acts as a control plane for auth, quota enforcement, and upload orchestration. No file ever transits the ZPan server — uploads and downloads go directly between the browser and your object storage via short-lived presigned URLs.
@@ -134,14 +134,16 @@ Every workspace (personal or team) has its own storage quota pool tracked in `or
 
 Quota is charged to the **workspace that owns the file** (`matters.orgId`), never to the individual member who uploaded it. Moving a file to another workspace transfers the quota charge accordingly.
 
-```typescript
-// Quota-exceeded response shape (HTTP 422 — no available offer)
+```json
+// HTTP 402 — additional capacity required (offers list non-empty)
 {
-  error: "CAPACITY_REQUIRED",
-  requestHash: string,
-  requestedBytes: number,
-  usedBytes: number,
-  quotaBytes: number,
-  offers: []
+  "error": "CAPACITY_REQUIRED",
+  "requestHash": "<string>",
+  "requestedBytes": 1073741824,
+  "usedBytes": 5368709120,
+  "quotaBytes": 5368709120,
+  "offers": [ ... ]
 }
 ```
+
+When no capacity offer is available (self-hosted or quota exhausted without an upgrade path), ZPan returns HTTP 422 with a standard error body instead.

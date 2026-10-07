@@ -1,7 +1,7 @@
 ---
-title: "OAuth 2.1 External App Integration"
+title: "OAuth 2.1 Integration for External Apps and Agents"
 sidebarTitle: "OAuth"
-description: "ZPan acts as an OAuth 2.1 authorization server. External apps use dynamic client registration, pushed authorization requests, and DPoP-bound tokens to access the API."
+description: "Connect external apps to ZPan using OAuth 2.1 with dynamic client registration, pushed authorization requests, and DPoP-bound access tokens."
 ---
 
 ZPan is both an OAuth 2.1 authorization server and the protected resource for its HTTP API. External applications — including Agent platforms, CI tools, and third-party integrations — can dynamically register their own OAuth client, request user consent, and receive short-lived DPoP-bound access tokens that are accepted by every protected ZPan endpoint. The integration is grounded in a suite of modern OAuth standards and is designed to work with generic OAuth 2.1 clients without ZPan-specific knowledge.
@@ -24,13 +24,16 @@ Clients begin by discovering ZPan's capabilities from well-known URLs. No ZPan-s
 
 | Contract | Path |
 |---|---|
-| Authorization server metadata | `/.well-known/oauth-authorization-server/api/auth` |
+| API discovery | `/api` |
+| OpenAPI specification | `/api/openapi.json` |
+| Upload workflows | `/api/workflows.arazzo.json` |
+| Agent Skills discovery index | `/.well-known/agent-skills/index.json` |
+| Realmroot-oriented ZPan Skill | `/.well-known/agent-skills/use-zpan.tar.gz` |
 | Protected resource metadata | `/.well-known/oauth-protected-resource/api` |
+| Authorization server metadata | `/.well-known/oauth-authorization-server/api/auth` |
 | Dynamic client registration | `/api/auth/oauth2/register` |
 | Dynamic client registration management (RFC 7592) | URI returned as `registration_client_uri` |
 | Pushed authorization requests | `/api/auth/oauth2/par` |
-| OpenAPI specification | `/api/openapi.json` |
-| Agent Skills discovery index | `/.well-known/agent-skills/index.json` |
 
 Authorization-server metadata advertises `scopes_supported`, `authorization_details_types_supported`, and `pushed_authorization_request_endpoint`. The same canonical `<resource>:<action>` scopes used by API keys (see [API Keys](/integrations/api-keys)) are advertised here. ZPan does not maintain a separate scope catalog endpoint.
 
@@ -38,12 +41,9 @@ Authorization-server metadata advertises `scopes_supported`, `authorization_deta
 
 ## Dynamic Client Registration
 
-External clients register themselves by sending a `POST` request to the registration endpoint. No prior coordination with the ZPan operator is required.
+External clients register themselves by sending a `POST` request to `/api/auth/oauth2/register` with `Content-Type: application/json`. No prior coordination with the ZPan operator is required.
 
-```bash
-POST /api/auth/oauth2/register
-Content-Type: application/json
-
+```json
 {
   "client_name": "My Integration",
   "redirect_uris": ["https://my-app.example/callback"],
@@ -183,7 +183,6 @@ ZPan's OAuth implementation is grounded in the following specifications:
 |---|---|
 | OAuth 2.1 | Core authorization framework |
 | RFC 7591 | Dynamic client registration |
-| RFC 7592 | Dynamic client registration management |
 | RFC 8693 | Token exchange |
 | RFC 8707 | Resource indicators |
 | RFC 9126 | Pushed authorization requests (PAR) |

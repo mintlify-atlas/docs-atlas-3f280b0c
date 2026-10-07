@@ -1,7 +1,7 @@
 ---
 title: "ZPan REST API Overview and Discovery"
 sidebarTitle: "Overview"
-description: "ZPan exposes a REST API at /api with OpenAPI documentation at /api/openapi.json. Covers base URL, versioning, response format, error envelope, and discovery endpoints."
+description: "ZPan REST API at /api with OpenAPI at /api/openapi.json. Covers base URL, error envelope, pagination, auth methods, and discovery endpoints."
 ---
 
 ZPan exposes a JSON REST API rooted at `/api`. Every response body follows a consistent envelope, every error uses the same AIP-193 `Error` schema, and every request receives a `Request-Id` header for support correlation. The machine-readable OpenAPI document and Arazzo upload workflow descriptor are served from the API itself, so SDKs and automation tools can discover contracts without consulting external registries.
@@ -58,9 +58,9 @@ Errors follow the [AIP-193](https://google.aip.dev/193) `google.rpc.Status` mode
 
 ## Pagination
 
-List endpoints use keyset-based opaque page tokens. Pass the `cursor` (or `pageToken`) query parameter from the previous response's `nextPageToken` to fetch the next page. A `null` or absent `nextPageToken` means there are no more results.
+List endpoints use keyset-based opaque page tokens. Pass the `pageToken` query parameter from the previous response's `nextPageToken` to fetch the next page. A `null` or absent `nextPageToken` means there are no more results.
 
-<ParamField query="cursor" type="string">
+<ParamField query="pageToken" type="string">
   Opaque page token returned by the previous list response. Omit for the first page.
 </ParamField>
 

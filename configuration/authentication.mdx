@@ -1,7 +1,7 @@
 ---
 title: "Authentication Configuration: SSO, Social Login, and Email"
 sidebarTitle: "Authentication"
-description: "Configure ZPan authentication with email/password, social OAuth providers (GitHub, Google), OIDC, and email verification. Manage invite codes and registration settings."
+description: "Configure ZPan authentication: email/password, social OAuth (GitHub, Google), OIDC, email verification, invite codes, and registration mode settings."
 ---
 
 ZPan uses [Better Auth](https://www.better-auth.com/) as its authentication layer. Out of the box, users can register and sign in with an email address and password. You can extend this with social OAuth providers, a custom OIDC provider, email verification, invite codes, and controlled registration modes. All authentication settings are managed in the Admin panel and through environment variables set at deployment time.
@@ -103,6 +103,14 @@ The full list is defined in the ZPan source. Any provider ID from better-auth's 
 ### Custom OIDC Providers
 
 To connect a provider that is not in the built-in list — such as a self-hosted Keycloak, Authentik, Dex, or any standards-compliant IdP — use the `oidc` type.
+
+When registering the application in your IdP, set the redirect URI to:
+
+```
+https://your-zpan-domain.example/api/auth/oauth2/callback/<provider-id>
+```
+
+OIDC providers use the `/api/auth/oauth2/callback/` path, which is different from the `/api/auth/callback/` path used by built-in social providers.
 
 | Field | Description |
 |---|---|

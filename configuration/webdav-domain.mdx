@@ -1,7 +1,7 @@
 ---
-title: "Configure a Dedicated WebDAV Custom Domain"
+title: "Set Up a Dedicated WebDAV Custom Domain in ZPan Instance"
 sidebarTitle: "WebDAV Domain"
-description: "Set up a dedicated hostname for WebDAV access in ZPan. Cloudflare Workers auto-configures the dav. subdomain; Docker and other runtimes require reverse proxy setup."
+description: "Set up a dedicated WebDAV hostname in ZPan. Cloudflare Workers auto-configures the dav. subdomain; Docker and other runtimes need a reverse proxy."
 ---
 
 When WebDAV is enabled, ZPan serves the WebDAV protocol internally at the `/dav/` path. This path always remains available. Optionally, you can give WebDAV its own dedicated hostname — for example, `dav.files.example.com` — so that WebDAV clients mount a clean root URL instead of a path-based one. How you set this up depends on your deployment runtime.
@@ -95,9 +95,8 @@ The proxy must satisfy all of the following conditions for ZPan to serve WebDAV 
 
 ### Example: Caddy
 
-```
+```caddy
 dav.files.example.com {
-  reverse_proxy /dav/* zpan:8222
   rewrite * /dav{uri}
   reverse_proxy zpan:8222
 }
