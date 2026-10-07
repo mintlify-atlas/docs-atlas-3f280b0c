@@ -1,0 +1,139 @@
+---
+title: "Deploy ZPan on Cloudflare Workers"
+sidebarTitle: "Cloudflare Workers"
+description: "Deploy ZPan to Cloudflare Workers using GitHub Actions. Zero server management, free tier covers personal use, with D1 database and R2 storage."
+---
+
+Cloudflare Workers is the recommended deployment target for ZPan. The entire control plane — authentication, metadata, sharing, quotas, WebDAV, and admin operations — runs as a Worker at the edge with no VPS or server to maintain. D1 provides the relational database, R2 stores avatars and public images, and KV handles distributed caching. GitHub Actions drives all deployments through Wrangler, so your fork stays in sync with upstream releases automatically.
+
+## How It Works
+
+ZPan's Workers build targets the `nodejs_compat` compatibility flag and web-standard APIs. On every deploy the workflow runs `wrangler deploy`, which provisions or updates the D1 database, KV namespace, R2 bucket, Queue, and Rate Limiter bindings declared in `wrangler.toml`. Migrations are applied to D1 automatically during the deploy step.
+
+## wrangler.toml Bindings
+
+The following Cloudflare resources are declared in `wrangler.toml` and provisioned by Wrangler on first deploy:
+
+| Binding | Type | Purpose |
+|---------|------|---------|
+| `ASSETS` | Static Assets | React SPA served as a single-page application |
+| `DB` | D1 Database | Relational database for users, files, shares, and metadata |
+| `CACHE_KV` | KV Namespace | Distributed cache for sessions and hot data |
+| `WEBDAV_RATE_LIMITER` | Rate Limiter | Per-connection rate limiting for WebDAV requests |
+| `PUBLIC_IMAGES` | R2 Bucket | Self-hosted avatar and logo storage |
+| `EMAIL` | Email Binding | Transactional email delivery |
+| `ARCHIVE_QUEUE` | Queue | Background archive job processing |
+
+### `wrangler.toml` variables
+
+| Variable | Value | Purpose |
+|----------|-------|---------|
+| `ZPAN_CLOUD_URL` | `https://cloud.zpan.space` | ZPan Cloud endpoint for licensing and entitlement |
+| `ZPAN_CACHE_MODE` | `distributed` | Uses KV for cache instead of in-memory |
+
+### Built-in cron triggers
+
+The Workers deployment runs all periodic tasks through Cloudflare's cron triggers — no external scheduler is needed:
+
+| Cron expression | Frequency | Purpose |
+|----------------|-----------|---------|
+| `*/10 * * * *` | Every 10 minutes | Traffic sync |
+| `10 * * * *` | Hourly | Hourly housekeeping |
+| `0 */6 * * *` | Every 6 hours | Entitlement/license refresh |
+| `0 */12 * * *` | Every 12 hours | Extended maintenance tasks |
+| `0 0 1 * *` | Monthly | Monthly aggregation |
+| `0 4 * * *` | Daily at 04:00 UTC | Daily cleanup |
+
+## Prerequisites
+
+Before running the deployment workflow you need:
+
+- A [Cloudflare account](https://dash.cloudflare.com/sign-up) (free plan is sufficient)
+- A fork of the `saltbo/zpan` repository on GitHub
+
+## GitHub Secrets
+
+Add the following secrets in your fork under **Settings → Secrets and variables → Actions**:
+
+| Secret | Where to find it | Required |
+|--------|-----------------|----------|
+| `CLOUDFLARE_ACCOUNT_ID` | Cloudflare dashboard sidebar, below your account name | Yes |
+| `CLOUDFLARE_API_TOKEN` | [Cloudflare API Tokens](https://dash.cloudflare.com/profile/api-tokens) — see permissions below | Yes |
+
+### API token permissions
+
+Create a **Custom Token** at [dash.cloudflare.com/profile/api-tokens](https://dash.cloudflare.com/profile/api-tokens) with the following permissions:
+
+| Permission | Level | Why it is needed |
+|------------|-------|-----------------|
+| Workers Scripts | Edit | Deploy the Worker and update its bindings |
+| D1 | Edit | Create and migrate the D1 database |
+| R2 Storage | Edit | Auto-provision the `zpan-public-images` avatar/logo bucket |
+| Transform Rules | Edit | **WebDAV only** — manages the root-to-`/dav` rewrite rule on a dedicated WebDAV hostname |
+
+<Note>
+**Transform Rules:Edit is optional.** You only need it if you plan to use a dedicated WebDAV hostname. Without it, WebDAV remains accessible at the `/dav/` path on your Worker's primary domain and the deploy workflow runs normally.
+</Note>
+
+## Deployment Steps
+
+<Steps>
+  <Step title="Fork the repository">
+    Go to [github.com/saltbo/zpan](https://github.com/saltbo/zpan) and click **Fork**. All GitHub Actions workflows run only in forks — the upstream repository includes a guard that prevents accidental deploys.
+  </Step>
+
+  <Step title="Add GitHub Secrets">
+    In your fork, go to **Settings → Secrets and variables → Actions** and add `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` using the values from your Cloudflare dashboard. See the permissions table above to configure the API token correctly.
+  </Step>
+
+  <Step title="Run the workflow">
+    Navigate to the **Actions** tab in your fork, select **Deploy to Cloudflare Workers** from the left sidebar, and click **Run workflow**. The first run provisions all Cloudflare resources and deploys ZPan. Subsequent runs update in place.
+  </Step>
+
+  <Step title="Register your first user">
+    When the workflow completes, open the Worker URL shown in the job summary. Register an account — the first user to register is automatically granted admin privileges.
+  </Step>
+
+  <Step title="Configure storage">
+    Go to **Admin → Storages → Add storage** and enter your S3-compatible bucket details (endpoint, region, access key, secret key). ZPan verifies the bucket is reachable and marks it active.
+
+    <Note>
+    The storage endpoint must be reachable from the **client browser**, not just from the Worker. Files upload directly from the browser to S3 via presigned URLs — the Worker never proxies file data.
+    </Note>
+  </Step>
+</Steps>
+
+## Automatic Redeployment on Fork Sync
+
+<Note>
+After the initial setup, the Deploy to Cloudflare Workers workflow runs automatically every time you sync your fork with the latest upstream release. You do not need to manually trigger it again — just keep your fork up to date and new versions deploy on their own.
+</Note>
+
+## Deployment Token vs. Runtime Provider Token
+
+ZPan uses two distinct Cloudflare API tokens for different purposes, and it is important not to confuse them:
+
+| Token | Used by | Permissions needed | Purpose |
+|-------|---------|--------------------|---------|
+| `CLOUDFLARE_API_TOKEN` (GitHub Secret) | GitHub Actions / Wrangler | Workers Scripts:Edit, D1:Edit, R2:Edit, (optionally Transform Rules:Edit) | Deploys the Worker and manages its Cloudflare infrastructure resources |
+| Zone-scoped Cloudflare token (Admin Settings) | Running ZPan instance | Cloudflare for SaaS permissions | Manages custom hostnames for image-hosting domains at runtime — entered in **Admin Settings → Image custom domains** |
+
+The runtime token entered inside the ZPan admin UI does **not** need D1, R2, or Workers Script permissions. It operates at the zone level only.
+
+## WebDAV Dedicated Domain
+
+When WebDAV is enabled in Admin Settings and a primary Worker Custom Domain is configured (for example `files.example.com`), ZPan automatically derives a WebDAV hostname of `dav.files.example.com`. The deployment workflow:
+
+1. Attaches and verifies the derived hostname on your Worker
+2. Creates a Transform Rule that rewrites all requests at the WebDAV hostname to the `/dav` path prefix
+3. Records the verification state so ZPan can advertise the dedicated endpoint
+
+Until verification succeeds, ZPan continues to advertise the standard `/dav/` path on the primary domain. You can check verification status at any time from **Admin Settings → WebDAV**.
+
+<Note>
+A custom WebDAV hostname requires the `Transform Rules:Edit` permission on your `CLOUDFLARE_API_TOKEN`. If you do not add this permission, the workflow will still succeed — only the WebDAV hostname automation is skipped.
+</Note>
+
+## Branch Previews
+
+`wrangler.toml` includes a `[previews]` section that wires Branch Preview deployments to separate staging resources (`zpan-db-staging`, staging KV, staging R2 bucket). Preview deployments set `ZPAN_PREVIEW=true` and disable archive jobs, so they never touch production data.

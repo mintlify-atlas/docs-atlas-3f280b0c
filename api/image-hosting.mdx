@@ -1,0 +1,327 @@
+---
+title: "Image Hosting API: Upload and Manage Images"
+sidebarTitle: "Image Hosting"
+description: "REST API for ZPan image hosting. Upload images via multipart POST, list hosted images, and configure image hosting settings. Requires images:upload scope."
+---
+
+ZPan includes a dedicated image hosting service that stores images in your S3-compatible storage backend and serves them at stable public URLs. It is compatible with tools like PicGo, ShareX, and uPic. Images are served at short redirect URLs using an opaque token; an optional custom domain can be configured to serve images from your own hostname.
+
+<Note>
+  Image hosting must be enabled before these endpoints can be used. If image hosting is not enabled for your workspace, all image endpoints return `403 Forbidden`. Enable it via `PUT /api/ihost/config`.
+</Note>
+
+## Supported Formats
+
+Accepted MIME types: `image/png`, `image/jpeg`, `image/gif`, `image/webp`. Maximum file size: **20 MiB**. SVG files are explicitly rejected to prevent XSS via inline scripts.
+
+## The ImageHosting Schema
+
+<ResponseField name="id" type="string" required>
+  Opaque identifier for this hosted image record.
+</ResponseField>
+
+<ResponseField name="orgId" type="string" required>
+  Workspace ID that owns this image.
+</ResponseField>
+
+<ResponseField name="token" type="string" required>
+  Short opaque token used in the public access URL.
+</ResponseField>
+
+<ResponseField name="path" type="string" required>
+  Storage path of the image within the configured image hosting prefix.
+</ResponseField>
+
+<ResponseField name="url" type="string" required>
+  Fully qualified public URL for accessing the image. Uses the configured custom domain if one is set and verified; otherwise uses the ZPan instance origin.
+</ResponseField>
+
+<ResponseField name="storageId" type="string" required>
+  ID of the storage backend holding this image.
+</ResponseField>
+
+<ResponseField name="storageKey" type="string" required>
+  S3 object key for this image.
+</ResponseField>
+
+<ResponseField name="size" type="integer" required>
+  File size in bytes.
+</ResponseField>
+
+<ResponseField name="mime" type="string" required>
+  MIME type of the image (e.g. `image/png`).
+</ResponseField>
+
+<ResponseField name="width" type="integer | null" required>
+  Image width in pixels, or `null` if not yet determined.
+</ResponseField>
+
+<ResponseField name="height" type="integer | null" required>
+  Image height in pixels, or `null` if not yet determined.
+</ResponseField>
+
+<ResponseField name="status" type="string" required>
+  `"active"` for confirmed images; `"draft"` for presigned-upload drafts.
+</ResponseField>
+
+<ResponseField name="accessCount" type="integer" required>
+  Number of times this image has been accessed via its public URL.
+</ResponseField>
+
+<ResponseField name="lastAccessedAt" type="string | null" required>
+  ISO 8601 timestamp of the most recent access, or `null` if never accessed.
+</ResponseField>
+
+<ResponseField name="createdAt" type="string" required>
+  ISO 8601 creation timestamp.
+</ResponseField>
+
+---
+
+## Upload Image (Tool-Compatible Endpoint)
+
+```
+POST /api/ihost/images
+```
+
+Uploads an image directly in one request. This endpoint accepts both `multipart/form-data` (PicGo, ShareX, uPic) and `application/json` with a base64-encoded `file` field (uPic JSON mode). Scope: `images:upload`.
+
+<ParamField body="file" type="file | string" required>
+  The image file. Send as a `File` field in `multipart/form-data`, or as a base64-encoded string in the `file` JSON field.
+</ParamField>
+
+<ParamField body="path" type="string">
+  Optional destination path within the image hosting storage. Supports template variables like `{year}`, `{month}`, and `{fileName}`. If omitted, ZPan derives a path from the filename and upload timestamp.
+</ParamField>
+
+<CodeGroup>
+
+```bash Multipart upload
+curl -X POST https://your-zpan.example/api/ihost/images \
+  -H 'Authorization: Bearer zpk_...' \
+  -F 'file=@screenshot.png' \
+  -F 'path=screenshots/2024/01/screenshot.png'
+```
+
+```bash JSON base64 upload
+curl -X POST https://your-zpan.example/api/ihost/images \
+  -H 'Authorization: Bearer zpk_...' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "file": "<base64-encoded-image-data>",
+    "filename": "screenshot.png"
+  }'
+```
+
+</CodeGroup>
+
+**Response `201`**
+
+```json
+{
+  "data": {
+    "url": "https://your-zpan.example/ih/abc123.png",
+    "urlAlt": "https://your-zpan.example/r/abc123.png",
+    "markdown": "![](https://your-zpan.example/ih/abc123.png)",
+    "html": "<img src=\"https://your-zpan.example/ih/abc123.png\" />",
+    "bbcode": "[img]https://your-zpan.example/ih/abc123.png[/img]"
+  }
+}
+```
+
+<Tip>
+  The response includes `markdown`, `html`, and `bbcode` format strings for easy insertion into content editors. Most image hosting tools (PicGo, ShareX) read the `data.url` field automatically.
+</Tip>
+
+---
+
+## Presign Image Upload
+
+```
+POST /api/ihost/images/presign
+```
+
+Creates an image draft and returns a presigned PUT URL for direct upload to storage. This is the two-step alternative to the single-request endpoint above. Scope: `images:create`.
+
+<ParamField body="path" type="string" required>
+  Destination path within image hosting storage (max 256 characters).
+</ParamField>
+
+<ParamField body="mime" type="string" required>
+  MIME type of the image. Must be one of `image/png`, `image/jpeg`, `image/gif`, `image/webp`.
+</ParamField>
+
+<ParamField body="size" type="integer" required>
+  File size in bytes. Used to enforce the 20 MiB limit before presigning.
+</ParamField>
+
+**Response `201`**
+
+```json
+{
+  "id": "01HQ...",
+  "token": "abc123",
+  "path": "photos/2024/01/photo.jpg",
+  "uploadUrl": "https://s3.example.com/...",
+  "storageKey": "ihost/photos/2024/01/photo.jpg"
+}
+```
+
+After PUTting the image bytes to `uploadUrl`, confirm the image with `PUT /api/ihost/images/{id}/status`.
+
+---
+
+## Confirm Image Upload
+
+```
+PUT /api/ihost/images/{id}/status
+```
+
+Confirms an image draft after the presigned PUT has completed. The image transitions from `draft` to `active` status. Scope: `images:update`.
+
+<ParamField path="id" type="string" required>
+  Opaque ID of the image draft.
+</ParamField>
+
+**Response `200`** — the confirmed `ImageHosting` record.
+
+---
+
+## List Hosted Images
+
+```
+GET /api/ihost/images
+```
+
+Returns a cursor-paged list of active hosted images for the current workspace. Scope: `images:read`.
+
+<ParamField query="pathPrefix" type="string">
+  Optional path prefix filter (e.g. `"screenshots/"` to list a subdirectory).
+</ParamField>
+
+<ParamField query="pageToken" type="string">
+  Opaque cursor from the previous response.
+</ParamField>
+
+<ParamField query="pageSize" type="integer">
+  Items per page (default 50, maximum 100).
+</ParamField>
+
+<CodeGroup>
+
+```bash curl
+curl -H 'Authorization: Bearer zpk_...' \
+  'https://your-zpan.example/api/ihost/images?pageSize=20'
+```
+
+</CodeGroup>
+
+---
+
+## Get Hosted Image
+
+```
+GET /api/ihost/images/{id}
+```
+
+Returns a single hosted image record. Scope: `images:read`.
+
+<ParamField path="id" type="string" required>
+  Opaque ID of the hosted image.
+</ParamField>
+
+---
+
+## Delete Hosted Image
+
+```
+DELETE /api/ihost/images/{id}
+```
+
+Deletes a hosted image from both the database and storage. Scope: `images:delete`.
+
+<ParamField path="id" type="string" required>
+  Opaque ID of the hosted image.
+</ParamField>
+
+**Response `204 No Content`** on success.
+
+---
+
+## Get Image Hosting Config
+
+```
+GET /api/ihost/config
+```
+
+Returns the current image hosting configuration for the workspace, including custom domain status and DNS instructions. Scope: `image-hosting-config:read`.
+
+**Response `200`**
+
+```json
+{
+  "enabled": true,
+  "customDomain": "images.example.com",
+  "domainVerifiedAt": 1709294400000,
+  "domainStatus": "verified",
+  "domainError": null,
+  "dnsInstructions": null,
+  "verificationPath": null,
+  "refererAllowlist": ["https://example.com"],
+  "createdAt": 1709208000000
+}
+```
+
+<ResponseField name="enabled" type="boolean" required>
+  Whether image hosting is active for this workspace.
+</ResponseField>
+
+<ResponseField name="customDomain" type="string | null" required>
+  Configured custom domain hostname, or `null` if none.
+</ResponseField>
+
+<ResponseField name="domainStatus" type="string" required>
+  One of `none`, `pending_dns`, `pending_tls`, `verified`, or `failed`.
+</ResponseField>
+
+<ResponseField name="dnsInstructions" type="array | null" required>
+  DNS records to create when `domainStatus` is `pending_dns`. Each entry has `recordType`, `name`, and `target` fields.
+</ResponseField>
+
+<ResponseField name="refererAllowlist" type="string[] | null" required>
+  List of allowed referrer origins (e.g. `https://myblog.com`) that may hot-link images. `null` means all origins are allowed.
+</ResponseField>
+
+---
+
+## Update Image Hosting Config
+
+```
+PUT /api/ihost/config
+```
+
+Enables image hosting and optionally sets a custom domain and referer allowlist. Scope: `image-hosting-config:update`. Requires team owner role.
+
+<ParamField body="enabled" type="boolean" required>
+  Must be `true`. To disable image hosting use `DELETE /api/ihost/config`.
+</ParamField>
+
+<ParamField body="customDomain" type="string | null">
+  A fully-qualified hostname (e.g. `images.example.com`) to serve images from. Must be a valid hostname — no protocol prefix, no port. After setting this, follow the `dnsInstructions` in the response to complete domain verification.
+</ParamField>
+
+<ParamField body="refererAllowlist" type="string[]">
+  Array of allowed referrer origins. Each entry must be a valid origin like `https://example.com`. Maximum 50 entries. Pass `null` to clear the allowlist and allow all origins.
+</ParamField>
+
+---
+
+## Delete Image Hosting Config
+
+```
+DELETE /api/ihost/config
+```
+
+Disables image hosting for the workspace and removes the configuration. Scope: `image-hosting-config:delete`. Requires team owner role.
+
+**Response `204 No Content`** on success.

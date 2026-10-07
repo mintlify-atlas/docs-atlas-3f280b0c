@@ -1,0 +1,189 @@
+---
+title: "Integrate Screenshot and Upload Tools with ZPan"
+sidebarTitle: "Tool Integrations"
+description: "Connect PicGo, PicList, uPic, ShareX, and Flameshot to ZPan image hosting. Generate configuration from the Tool Integration panel using your API key."
+---
+
+ZPan's image hosting feature works with the most popular screenshot and upload tools across every major platform. All configuration is generated client-side in the Tool Integration panel — the server never stores or transmits your plaintext API key, so the credentials you paste stay entirely in your browser session.
+
+## Prerequisites
+
+Before configuring any tool, complete the following steps:
+
+1. Enable **Image Hosting** in your ZPan workspace settings.
+2. Navigate to **Settings → Image Hosting → API Keys** and create a new API key. Assign it the `images:upload` scope.
+3. **Copy and save the key immediately** — ZPan displays it only once at creation time. It cannot be retrieved again.
+4. Open **Settings → Image Hosting → Tool Integration** and paste the key you saved. The panel will generate the correct configuration for each supported tool.
+
+<Warning>
+  The key you paste into the Tool Integration panel is ephemeral. It is never written to `localStorage` or sent to the server. If you close the panel without copying the generated configuration, paste the key again — you do not need to create a new key.
+</Warning>
+
+---
+
+## Tool Configuration
+
+<Tabs>
+  <Tab title="PicGo / PicList">
+
+PicGo is a cross-platform image uploader with a plugin ecosystem. PicList is a maintained fork with additional features; both support the same `picgo-plugin-web-uploader` plugin used here.
+
+### Install the Plugin
+
+```bash
+# Install via the PicGo CLI
+picgo install picgo-plugin-web-uploader
+
+# Or use the GUI Plugin Manager:
+# open PicGo → Plugin Settings → search "web-uploader" → Install
+```
+
+### Configure
+
+1. Open PicGo → **Settings** → **Uploader** → **Custom Web**.
+2. Copy the generated JSON from the Tool Integration panel and paste it into the Custom Web configuration field.
+3. Set **Custom Web** as the default uploader.
+4. Click **Test** to verify the upload works.
+
+The generated JSON has the following shape:
+
+```json
+{
+  "url": "https://<your-zpan-host>/api/ihost/images",
+  "paramName": "file",
+  "jsonPath": "data.url",
+  "customHeader": "{\"Authorization\":\"Bearer <your-key>\"}",
+  "customBody": "{\"path\":\"{year}/{month}/{fileName}\"}"
+}
+```
+
+<Note>
+  Replace `<your-zpan-host>` with your ZPan instance's hostname and `<your-key>` with the API key you created. The Tool Integration panel substitutes these values automatically when you paste your key.
+</Note>
+
+  </Tab>
+  <Tab title="uPic (macOS)">
+
+uPic is a macOS menu-bar image uploader that supports custom HTTP hosts.
+
+### Configure via JSON Import
+
+1. Open uPic → **Preferences** → **Host** → click **+** → choose **Custom**.
+2. Copy the generated JSON from the Tool Integration panel and save it to a file (for example, `zpan-upic.json`).
+3. In uPic, select **File → Import Config** and open that file.
+
+### Configure Manually
+
+If you prefer to fill in each field by hand, use the following values:
+
+| Field | Value |
+|---|---|
+| API URL | `https://<your-zpan-host>/api/ihost/images` |
+| File Form Key | `file` |
+| Authorization Header | `Bearer <your-key>` |
+| Response Field | `data.url` |
+
+<Tip>
+  After saving, click the **Verify** button in uPic to upload a test image and confirm that the returned URL resolves correctly.
+</Tip>
+
+  </Tab>
+  <Tab title="ShareX (Windows)">
+
+ShareX supports custom upload targets through `.sxcu` configuration files, which encode the full uploader definition and can be imported with a double-click.
+
+### Import the Configuration
+
+1. Click **Generate & Download** in the Tool Integration panel to download `zpan-ihost.sxcu`.
+2. Double-click the file — ShareX will automatically import it as a custom uploader.
+3. Open ShareX → **Destinations** → **Custom Uploader Settings** and confirm that **ZPan Image Host** is listed.
+4. Set the active destination to **ZPan Image Host** under **Destinations → Image Uploader**.
+
+The downloaded `.sxcu` file contains:
+
+```json
+{
+  "Version": "15.0.0",
+  "Name": "ZPan Image Host",
+  "DestinationType": "ImageUploader, FileUploader",
+  "RequestMethod": "POST",
+  "RequestURL": "https://<your-zpan-host>/api/ihost/images",
+  "Headers": { "Authorization": "Bearer <your-key>" },
+  "Body": "MultipartFormData",
+  "FileFormName": "file",
+  "Arguments": { "path": "%y/%mo/$filename$" },
+  "URL": "{json:data.url}",
+  "ErrorMessage": "{json:error}"
+}
+```
+
+<Note>
+  ShareX substitutes `%y` and `%mo` with the current year and month at upload time, keeping your images organised by date.
+</Note>
+
+  </Tab>
+  <Tab title="Flameshot (Linux)">
+
+Flameshot is an open-source Linux screenshot tool. Because it does not have a built-in HTTP uploader, ZPan provides a short shell script that pipes the captured image directly to the API.
+
+### Requirements
+
+Ensure the following utilities are installed before using the script:
+
+| Utility | Purpose |
+|---|---|
+| `curl` | HTTP upload |
+| `jq` | Parse the JSON response to extract the image URL |
+| `xclip` | Copy the URL to the clipboard on X11 |
+| `wl-clipboard` (`wl-copy`) | Copy the URL to the clipboard on Wayland |
+
+### Set Up the Script
+
+1. Copy the generated script from the Tool Integration panel.
+2. Save it as `~/bin/zpan-upload.sh` and make it executable:
+
+```bash
+chmod +x ~/bin/zpan-upload.sh
+```
+
+3. Capture a screenshot and pipe it to the script:
+
+```bash
+flameshot gui --raw | ~/bin/zpan-upload.sh
+```
+
+The script uploads the image and writes the resulting URL to the clipboard. Its contents look like this:
+
+```bash
+IHOST_KEY="<your-key>"
+flameshot gui --raw | curl \
+  -H "Authorization: Bearer $IHOST_KEY" \
+  -F "file=@-" \
+  -F "path=screenshots/$(date +%Y/%m)/$(date +%s).png" \
+  https://<your-zpan-host>/api/ihost/images \
+  | jq -r '.data.url' | xclip -selection clipboard
+```
+
+For Wayland sessions, replace `xclip -selection clipboard` with `wl-copy`.
+
+### Bind a Keyboard Shortcut
+
+To trigger the upload directly from a keyboard shortcut, add a custom shortcut in your desktop environment's keyboard settings that runs:
+
+```bash
+flameshot gui --raw | ~/bin/zpan-upload.sh
+```
+
+Consult your desktop environment's documentation (GNOME, KDE, i3, Sway, etc.) for the exact steps to bind a custom command to a key combination.
+
+  </Tab>
+</Tabs>
+
+---
+
+## Security Notes
+
+- **API keys are hashed on the server.** ZPan never stores plaintext keys, so even a database compromise does not expose your credentials.
+- **The key is shown exactly once.** Save it before closing the creation dialog. If you lose it, revoke the old key and create a new one under **Settings → Image Hosting → API Keys**.
+- **The Tool Integration panel does not persist your key.** The key you paste is used only to generate configuration client-side; it is never written to `localStorage` or transmitted back to the server.
+- **Do not commit keys to version control.** If a key is accidentally exposed, revoke it immediately from the API Keys settings page.

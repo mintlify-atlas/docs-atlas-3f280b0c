@@ -1,0 +1,181 @@
+---
+title: "WebDAV Access for Mounting ZPan as a Network Drive"
+sidebarTitle: "WebDAV"
+description: "Mount your ZPan workspace as a WebDAV drive on macOS, Windows, or Linux. Connect any WebDAV client to /dav/ or configure a dedicated hostname."
+---
+
+ZPan exposes a full WebDAV server so you can mount your workspaces as a network drive on any operating system. WebDAV access lets you use native OS file operations — drag-and-drop, Finder, Windows Explorer, or command-line tools — directly against your ZPan storage without going through the web UI.
+
+## Enabling WebDAV
+
+WebDAV is disabled by default and must be turned on by an instance administrator.
+
+<Steps>
+  <Step title="Open Admin Settings">
+    Navigate to **Admin → Settings** in the ZPan web UI.
+  </Step>
+  <Step title="Enable WebDAV">
+    Toggle **Enable WebDAV** on. ZPan begins accepting WebDAV requests at the `/dav/` path immediately.
+  </Step>
+  <Step title="Optionally configure a dedicated hostname">
+    Enter a custom hostname in the **WebDAV → Domain** field if you want a dedicated WebDAV URL such as `dav.files.example.com`. Leave it blank to use the auto-derived hostname (see below).
+  </Step>
+</Steps>
+
+## Default Endpoint
+
+When WebDAV is enabled, the server is always reachable at:
+
+```
+https://your-zpan.example/dav/
+```
+
+This path works on every deployment type — Cloudflare Workers, Docker, Lambda — without any additional configuration.
+
+## Dedicated Hostname
+
+A dedicated hostname provides a cleaner WebDAV URL such as `https://dav.files.example.com/` and avoids path-prefix issues with some WebDAV clients.
+
+**Auto-derived hostname:** If you leave the WebDAV domain field blank, ZPan derives a hostname by prepending `dav.` to the public URL you configured in Admin Settings. For example:
+
+| Public URL | Derived WebDAV hostname |
+|---|---|
+| `https://files.example.com` | `dav.files.example.com` |
+| `https://zpan.mysite.io` | `dav.zpan.mysite.io` |
+
+**Custom hostname:** Set any hostname without a protocol, port, or path in **Admin Settings → WebDAV → Domain**. After saving, ZPan advertises the custom hostname instead of the derived one — but only after verification succeeds.
+
+<Note>
+  Until the dedicated hostname is verified, ZPan continues to advertise the `/dav/` path endpoint to WebDAV clients. After verification, ZPan records the dedicated origin and advertises it instead. Changing the Public URL invalidates the previous verification automatically.
+</Note>
+
+## Verification
+
+After configuring DNS and the proxy in front of ZPan, click **Verify domain** in **Admin Settings → WebDAV**. ZPan sends an unauthenticated `OPTIONS` request to the configured hostname and accepts it only when it receives ZPan's WebDAV authentication challenge in response.
+
+This verification works the same way for Docker, Lambda, Vercel, Netlify, Azure, Cloud Run, and every other deployment type. ZPan does not configure external DNS or proxies for you.
+
+## Connecting WebDAV Clients
+
+### Credentials
+
+Use the same username and password as your ZPan web UI login. WebDAV authenticates via HTTP Basic Auth; credentials are validated against the API key and user database, not passed through in plaintext.
+
+<Warning>
+  Always use HTTPS when connecting WebDAV clients. Sending Basic Auth credentials over HTTP exposes your password in plaintext.
+</Warning>
+
+### macOS Finder
+
+<Steps>
+  <Step title="Open Connect to Server">
+    In Finder, press `⌘K` or go to **Go → Connect to Server**.
+  </Step>
+  <Step title="Enter the WebDAV URL">
+    Type the server address:
+    ```
+    https://your-zpan.example/dav/
+    ```
+    Or, if using a dedicated hostname:
+    ```
+    https://dav.files.example.com/
+    ```
+  </Step>
+  <Step title="Authenticate">
+    Enter your ZPan username and password when prompted. Choose whether to save credentials in the keychain.
+  </Step>
+</Steps>
+
+### Windows
+
+<Steps>
+  <Step title="Open Map Network Drive">
+    In Windows Explorer, right-click **This PC** and select **Map network drive**.
+  </Step>
+  <Step title="Enter the WebDAV URL">
+    Choose a drive letter and enter the folder path:
+    ```
+    https://your-zpan.example/dav/
+    ```
+    Check **Connect using different credentials**.
+  </Step>
+  <Step title="Enter credentials">
+    Enter your ZPan username and password.
+  </Step>
+</Steps>
+
+<Tip>
+  Windows sometimes has trouble with WebDAV over HTTPS when the server certificate uses a non-standard CA. Ensure your ZPan deployment uses a publicly trusted TLS certificate (Let's Encrypt, Cloudflare, or similar).
+</Tip>
+
+### Linux
+
+Use any WebDAV client such as `davfs2`, Nautilus, or Dolphin. With `davfs2`:
+
+```bash
+# Install davfs2
+sudo apt install davfs2
+
+# Mount ZPan WebDAV
+sudo mount -t davfs https://your-zpan.example/dav/ /mnt/zpan
+
+# Enter your ZPan username and password when prompted
+```
+
+For persistent mounts, add credentials to `/etc/davfs2/secrets`:
+
+```
+https://your-zpan.example/dav/ your-username your-password
+```
+
+## Cloudflare Workers: Dedicated Hostname Setup
+
+When deploying on Cloudflare Workers, the dedicated WebDAV hostname is managed automatically if you have granted `Transform Rules:Edit` permission to the deployment token.
+
+The deployment workflow:
+1. Finds the primary Worker Custom Domain already attached to the `zpan` Worker
+2. Derives the `dav.` hostname and creates a hostname-only Transform Rule that rewrites requests from the dedicated hostname root to `/dav`
+3. Attaches the derived hostname as an additional Worker Custom Domain
+4. Verifies the WebDAV authentication challenge
+
+ZPan-owned Transform Rules use a `zpan_webdav_` reference prefix and never replace or delete unrelated rules.
+
+For a **custom** WebDAV hostname (not the auto-derived `dav.` prefix), configure that hostname as a Worker Custom Domain manually and add an equivalent root-to-`/dav` rewrite. The deployment workflow only automates the derived hostname.
+
+If the Worker has no primary Custom Domain, the deployment skips dedicated hostname setup and `/dav/` remains available. If the Worker has multiple candidate primary Custom Domains, deployment fails instead of choosing arbitrarily.
+
+## Docker and Reverse Proxies
+
+For Docker, Lambda, and other deployments, configure your reverse proxy to serve the dedicated WebDAV hostname as follows:
+
+1. **Route** requests for `dav.files.example.com` (or your custom hostname) to the ZPan process.
+2. **Prefix** every incoming request path with `/dav` internally, without issuing an HTTP redirect.
+3. **Preserve** the original `Host` header, HTTP method, query string, request body, and all WebDAV-specific headers: `Destination`, `If`, `Depth`, `Overwrite`, and `Lock-Token`.
+
+For example, an external request to `/Workspace/notes.txt` must reach ZPan internally as `/dav/Workspace/notes.txt` while the `Host` header remains `dav.files.example.com`. ZPan then emits root-relative WebDAV resource addresses like `/Workspace/notes.txt` in responses.
+
+A minimal nginx location block:
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name dav.files.example.com;
+
+    location / {
+        rewrite ^/(.*)$ /dav/$1 break;
+        proxy_pass http://zpan:8222;
+        proxy_set_header Host $host;
+        proxy_set_header Destination $http_destination;
+        proxy_set_header Depth $http_depth;
+        proxy_set_header Overwrite $http_overwrite;
+        proxy_set_header Lock-Token $http_lock_token;
+        proxy_set_header If $http_if;
+    }
+}
+```
+
+After configuring DNS and the proxy, use **Admin Settings → WebDAV → Verify domain** to confirm the setup.
+
+## Rate Limiting
+
+The WebDAV endpoint enforces a rate limit of **3600 requests per 60 seconds** per credential. On Cloudflare Workers deployments this is enforced using the native Workers Rate Limiter binding. Requests that exceed the limit receive HTTP 429 with a `Retry-After` header.

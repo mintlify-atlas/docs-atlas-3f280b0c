@@ -1,0 +1,317 @@
+---
+title: "Download Tasks API: Queue Remote Downloads"
+sidebarTitle: "Download Tasks"
+description: "REST API for managing remote download tasks in ZPan. Queue HTTP URLs, magnet links, and torrents for download. Requires download-tasks scopes."
+---
+
+The Download Tasks API lets you queue remote files for download directly into your ZPan storage — no local client required. Supported source types are HTTP/HTTPS URLs, magnet links, and torrent file URLs. Tasks are executed by configured downloader agents; ZPan manages assignment, progress tracking, retry logic, and final ingestion into the file system.
+
+<Note>
+  Download tasks require a downloader agent to be registered and online. Tasks enter `queued` status on creation and transition through `assigned → downloading → uploading → completed`. See the task status reference below.
+</Note>
+
+## Required Scopes
+
+| Operation | Required Scope |
+|---|---|
+| List, get tasks | `download-tasks:read` |
+| Create task | `download-tasks:create` |
+| Cancel, pause, resume, delete | `download-tasks:cancel` |
+
+## Task Status Reference
+
+| Status | Description |
+|---|---|
+| `queued` | Waiting to be assigned to a downloader agent. |
+| `assigned` | Assigned to a downloader agent, not yet started. |
+| `downloading` | Agent is actively downloading the remote resource. |
+| `pausing` | A pause has been requested; agent is acknowledging. |
+| `paused` | Download is paused. Resume with `PUT /{id}/status`. |
+| `interrupted` | Download was interrupted unexpectedly. |
+| `suspended` | Task has been suspended by the system. |
+| `uploading` | Agent is ingesting the downloaded bytes into ZPan storage. |
+| `canceling` | A cancel has been requested; agent is cleaning up. |
+| `completed` | Download finished successfully; object is available in ZPan. |
+| `failed` | Task failed. See `status.error` for the reason. |
+| `canceled` | Task was explicitly canceled by the user. |
+
+---
+
+## List Download Tasks
+
+```
+GET /api/downloads
+```
+
+Returns a cursor-paged list of download tasks for the current workspace. Scope: `download-tasks:read`.
+
+<ParamField query="status" type="string">
+  Comma-separated list of statuses to filter by (e.g. `queued,downloading,paused`).
+</ParamField>
+
+<ParamField query="category" type="string">
+  Filter by task category label.
+</ParamField>
+
+<ParamField query="tag" type="string">
+  Filter by a single tag label.
+</ParamField>
+
+<ParamField query="pageToken" type="string">
+  Opaque cursor from the previous response.
+</ParamField>
+
+<ParamField query="pageSize" type="integer">
+  Items per page (default 20, maximum 100).
+</ParamField>
+
+<CodeGroup>
+
+```bash curl
+curl -H 'Authorization: Bearer zpk_...' \
+  'https://your-zpan.example/api/downloads?status=queued,downloading'
+```
+
+</CodeGroup>
+
+**Response `200`**
+
+```json
+{
+  "items": [
+    {
+      "id": "01HQ...",
+      "spec": {
+        "source": { "type": "http", "uri": "https://example.com/file.zip" },
+        "destination": { "folder": "downloads", "name": null },
+        "labels": { "category": null, "tags": [] }
+      },
+      "status": {
+        "state": "downloading",
+        "progress": {
+          "download": { "bytes": 10485760, "totalBytes": 104857600, "bytesPerSecond": 5242880 },
+          "upload": { "bytes": 0, "totalBytes": null, "bytesPerSecond": 0 }
+        },
+        "runtime": null
+      },
+      "createdAt": "2024-03-01T10:00:00Z"
+    }
+  ],
+  "nextPageToken": null
+}
+```
+
+---
+
+## Create Download Task
+
+```
+POST /api/downloads
+```
+
+Queues a new remote download. The task enters `queued` status and is assigned to an available downloader agent. Scope: `download-tasks:create`.
+
+<ParamField body="source" type="object" required>
+  Source descriptor object.
+</ParamField>
+
+<ParamField body="source.type" type="string" required>
+  Source type: `http` (HTTP/HTTPS URL), `magnet` (magnet URI), or `torrent_url` (URL to a `.torrent` file).
+</ParamField>
+
+<ParamField body="source.uri" type="string" required>
+  The URL or magnet URI to download. HTTP/HTTPS URLs must point to public addresses. Magnet URIs must begin with `magnet:?`.
+</ParamField>
+
+<ParamField body="targetFolder" type="string" required>
+  Destination folder path in ZPan storage (e.g. `"downloads/movies"`). Slashes are normalized; `..` segments are rejected.
+</ParamField>
+
+<ParamField body="name" type="string">
+  Optional override for the downloaded file's name. If omitted, the name is derived from the source URL or torrent metadata.
+</ParamField>
+
+<ParamField body="category" type="string">
+  Optional category label for organizing tasks (max 120 characters).
+</ParamField>
+
+<ParamField body="tags" type="string[]">
+  Optional array of tag labels (max 20 tags, each up to 80 characters).
+</ParamField>
+
+<CodeGroup>
+
+```bash HTTP download
+curl -X POST https://your-zpan.example/api/downloads \
+  -H 'Authorization: Bearer zpk_...' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "source": { "type": "http", "uri": "https://example.com/archive.zip" },
+    "targetFolder": "downloads"
+  }'
+```
+
+```bash Magnet link
+curl -X POST https://your-zpan.example/api/downloads \
+  -H 'Authorization: Bearer zpk_...' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "source": {
+      "type": "magnet",
+      "uri": "magnet:?xt=urn:btih:abc123..."
+    },
+    "targetFolder": "torrents/completed",
+    "category": "torrents"
+  }'
+```
+
+</CodeGroup>
+
+**Response `201`** — the created `DownloadTask` object.
+
+---
+
+## Get Download Task
+
+```
+GET /api/downloads/{id}
+```
+
+Returns the full state of a single download task, including real-time progress, assignment, billing, and any error information. Scope: `download-tasks:read`.
+
+<ParamField path="id" type="string" required>
+  Opaque ID of the download task.
+</ParamField>
+
+**Response `200`** — full `DownloadTask` object including `status.progress`, `status.runtime`, `status.error`, and `status.output`.
+
+---
+
+## Get Task Timeline
+
+```
+GET /api/downloads/{id}/events
+```
+
+Returns a chronological timeline of status transitions and events for a task. Useful for diagnosing failures. Scope: `download-tasks:read`.
+
+<ParamField path="id" type="string" required>
+  Opaque ID of the download task.
+</ParamField>
+
+**Response `200`**
+
+```json
+{
+  "items": [
+    {
+      "id": "initial:01HQ...",
+      "taskId": "01HQ...",
+      "time": "2024-03-01T10:00:00Z",
+      "source": "task",
+      "action": "created",
+      "title": "Task queued",
+      "detail": null,
+      "severity": "info",
+      "metadata": null
+    }
+  ]
+}
+```
+
+---
+
+## Pause, Resume, or Cancel a Task
+
+```
+PUT /api/downloads/{id}/status
+```
+
+Changes the status of an active task. Scope: `download-tasks:cancel`.
+
+<ParamField path="id" type="string" required>
+  Opaque ID of the download task.
+</ParamField>
+
+<ParamField body="status" type="string" required>
+  Target status. Use `"paused"` to pause, `"queued"` to resume a paused task, or `"canceled"` to cancel.
+</ParamField>
+
+<CodeGroup>
+
+```bash Pause
+curl -X PUT https://your-zpan.example/api/downloads/01HQ.../status \
+  -H 'Authorization: Bearer zpk_...' \
+  -H 'Content-Type: application/json' \
+  -d '{"status": "paused"}'
+```
+
+```bash Cancel
+curl -X PUT https://your-zpan.example/api/downloads/01HQ.../status \
+  -H 'Authorization: Bearer zpk_...' \
+  -H 'Content-Type: application/json' \
+  -d '{"status": "canceled"}'
+```
+
+</CodeGroup>
+
+**Response `200`** — the updated `DownloadTask` object.
+
+---
+
+## Retry or Restart a Task
+
+```
+POST /api/downloads/{id}/attempts
+```
+
+Starts a new attempt for a failed or canceled task. Scope: `download-tasks:cancel`.
+
+<ParamField path="id" type="string" required>
+  Opaque ID of the download task.
+</ParamField>
+
+<ParamField body="fresh" type="boolean">
+  `false` (default) retries from the last checkpoint. `true` restarts the entire download from scratch.
+</ParamField>
+
+**Response `201`** — the updated `DownloadTask` object with incremented `status.attempt`.
+
+---
+
+## Delete Download Task
+
+```
+DELETE /api/downloads/{id}
+```
+
+Permanently deletes a download task and its history. Only completed, failed, or canceled tasks can be deleted. Scope: `download-tasks:cancel`.
+
+<ParamField path="id" type="string" required>
+  Opaque ID of the download task.
+</ParamField>
+
+**Response `204 No Content`** on success.
+
+---
+
+## Real-Time Task Updates via SSE
+
+For live progress updates without polling, subscribe to the server-sent events stream:
+
+```
+GET /api/events?downloadTasks=1
+```
+
+The stream emits task state change events as they occur. Requires an authenticated session with the `download-tasks:read` scope on the API key.
+
+<CodeGroup>
+
+```bash curl
+curl -H 'Authorization: Bearer zpk_...' \
+  'https://your-zpan.example/api/events?downloadTasks=1'
+```
+
+</CodeGroup>
+
+Each event is a JSON object with the updated task state. The connection remains open until closed by the client.

@@ -1,0 +1,343 @@
+---
+title: "Shares API: Create and Manage Share Links"
+sidebarTitle: "Shares"
+description: "REST API for creating and managing share links in ZPan. Supports password protection, expiry, download limits, and both landing page and direct download link kinds."
+---
+
+The Shares API lets users create and manage shareable links for files and folders. Shares can be protected with a password, set to expire at a given time, capped to a maximum number of downloads, and scoped to either a landing-page experience (`landing` kind) or a direct download redirect (`direct` kind). Public share endpoints require no authentication — they are designed for anonymous recipients following a link.
+
+<Note>
+  Authenticated share management requires the `shares:read`, `shares:create`, or `shares:delete` scope depending on the operation. Public share endpoints (`GET /api/shares/{token}`, etc.) require no credentials.
+</Note>
+
+## The ShareView Schema
+
+<ResponseField name="token" type="string" required>
+  Short opaque token that appears in the share URL.
+</ResponseField>
+
+<ResponseField name="kind" type="string" required>
+  Either `"landing"` (shows a preview page at `/s/{token}`) or `"direct"` (redirects to the file at `/r/{token}`).
+</ResponseField>
+
+<ResponseField name="status" type="string" required>
+  Lifecycle status. `"active"` for live shares; `"revoked"` for manually revoked shares.
+</ResponseField>
+
+<ResponseField name="expiresAt" type="string | null" required>
+  ISO 8601 expiry timestamp, or `null` for shares that never expire.
+</ResponseField>
+
+<ResponseField name="downloadLimit" type="integer | null" required>
+  Maximum number of downloads permitted, or `null` for unlimited.
+</ResponseField>
+
+<ResponseField name="matter" type="object" required>
+  Summary of the shared object: `name`, `type`, `size`, and `isFolder`.
+</ResponseField>
+
+<ResponseField name="creatorName" type="string" required>
+  Display name of the user who created the share.
+</ResponseField>
+
+<ResponseField name="creatorUsername" type="string | null" required>
+  Username of the creator, or `null` if the user has no username.
+</ResponseField>
+
+<ResponseField name="requiresPassword" type="boolean" required>
+  Whether a password is required to access this share.
+</ResponseField>
+
+<ResponseField name="expired" type="boolean" required>
+  Whether the share has passed its `expiresAt` time.
+</ResponseField>
+
+<ResponseField name="exhausted" type="boolean" required>
+  Whether the `downloadLimit` has been reached.
+</ResponseField>
+
+<ResponseField name="accessibleByUser" type="boolean" required>
+  Whether the currently authenticated user (if any) can access the share without entering a password.
+</ResponseField>
+
+<ResponseField name="downloads" type="integer" required>
+  Total number of downloads recorded for this share.
+</ResponseField>
+
+<ResponseField name="views" type="integer" required>
+  Total number of unique landing-page views recorded.
+</ResponseField>
+
+<ResponseField name="rootRef" type="string" required>
+  Encoded reference to the root object of this share, used by the landing page to construct download URLs.
+</ResponseField>
+
+---
+
+## List Shares
+
+```
+GET /api/shares
+```
+
+Returns a cursor-paged list of shares created by the authenticated user. Scope: `shares:read`.
+
+<ParamField query="pageToken" type="string">
+  Opaque cursor token from the previous response.
+</ParamField>
+
+<ParamField query="pageSize" type="integer">
+  Items per page (default 20, maximum 100).
+</ParamField>
+
+<ParamField query="status" type="string">
+  Filter by share status: `active` or `revoked`.
+</ParamField>
+
+<ParamField query="box" type="string">
+  Filter by box context (e.g. personal or team workspace).
+</ParamField>
+
+<CodeGroup>
+
+```bash curl
+curl -H 'Authorization: Bearer zpk_...' \
+  'https://your-zpan.example/api/shares?pageSize=20'
+```
+
+</CodeGroup>
+
+**Response `200`**
+
+```json
+{
+  "items": [
+    {
+      "id": "01HQ...",
+      "token": "abc123",
+      "kind": "landing",
+      "status": "active",
+      "expiresAt": null,
+      "downloadLimit": null,
+      "downloads": 4,
+      "views": 12,
+      "createdAt": "2024-03-01T10:00:00Z",
+      "matter": { "name": "report.pdf", "type": "application/pdf", "dirtype": 0 }
+    }
+  ],
+  "nextPageToken": null
+}
+```
+
+---
+
+## Create Share
+
+```
+POST /api/shares
+```
+
+Creates a share link for a file or folder. Scope: `shares:create`.
+
+<ParamField body="matterId" type="string" required>
+  Opaque ID of the object to share.
+</ParamField>
+
+<ParamField body="kind" type="string" required>
+  `"landing"` for a preview page at `/s/{token}`, or `"direct"` for a download redirect at `/r/{token}`.
+</ParamField>
+
+<ParamField body="password" type="string">
+  Optional password. Recipients must enter this password before accessing the share.
+</ParamField>
+
+<ParamField body="expiresAt" type="string">
+  Optional ISO 8601 expiry datetime. The share stops working after this time.
+</ParamField>
+
+<ParamField body="downloadLimit" type="integer">
+  Optional maximum number of times the share can be downloaded.
+</ParamField>
+
+<CodeGroup>
+
+```bash curl
+curl -X POST https://your-zpan.example/api/shares \
+  -H 'Authorization: Bearer zpk_...' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "matterId": "01HQ...",
+    "kind": "landing",
+    "expiresAt": "2024-04-01T00:00:00Z",
+    "downloadLimit": 10
+  }'
+```
+
+</CodeGroup>
+
+**Response `201`**
+
+```json
+{
+  "token": "abc123",
+  "kind": "landing",
+  "urls": { "landing": "/s/abc123" },
+  "expiresAt": "2024-04-01T00:00:00Z",
+  "downloadLimit": 10,
+  "private": false
+}
+```
+
+---
+
+## Get Share
+
+```
+GET /api/shares/{token}
+```
+
+Returns the full `ShareView` for a share, including public metadata visible to any recipient. This endpoint is **public** — no authentication required. Scope: none.
+
+<ParamField path="token" type="string" required>
+  The share token from the share URL.
+</ParamField>
+
+<CodeGroup>
+
+```bash curl
+curl https://your-zpan.example/api/shares/abc123
+```
+
+</CodeGroup>
+
+---
+
+## Verify Share Password
+
+```
+POST /api/shares/{token}/sessions
+```
+
+Verifies a password for a password-protected share. On success, sets an HTTP-only access cookie that authorizes subsequent download requests for this share. This endpoint is **public**. Scope: none.
+
+<ParamField path="token" type="string" required>
+  The share token.
+</ParamField>
+
+<ParamField body="password" type="string" required>
+  The password to verify.
+</ParamField>
+
+**Response `200`** — `{ "ok": true }` on successful verification.
+
+**Response `403`** — invalid password.
+
+---
+
+## List Share Objects
+
+```
+GET /api/shares/{token}/objects
+```
+
+Lists the contents of a folder share for display on the landing page. This endpoint is **public**. Scope: none.
+
+<ParamField path="token" type="string" required>
+  The share token.
+</ParamField>
+
+<ParamField query="parent" type="string">
+  Relative subfolder path within the share to list.
+</ParamField>
+
+<ParamField query="pageToken" type="string">
+  Opaque cursor for pagination.
+</ParamField>
+
+<ParamField query="pageSize" type="integer">
+  Items per page (default 50, maximum 100).
+</ParamField>
+
+---
+
+## Revoke Share
+
+```
+PUT /api/shares/{token}/status
+```
+
+Revokes an active share. Revoked shares return `404` to recipients. Scope: `shares:delete`.
+
+<ParamField path="token" type="string" required>
+  The share token.
+</ParamField>
+
+<ParamField body="status" type="string" required>
+  Must be `"revoked"`.
+</ParamField>
+
+**Response `200`** — the updated `ShareView` with `status: "revoked"`.
+
+---
+
+## Set Share Privacy
+
+```
+PUT /api/shares/{token}/privacy
+```
+
+Controls whether the share appears on the owner's public profile page. Scope: `shares:create`.
+
+<ParamField path="token" type="string" required>
+  The share token.
+</ParamField>
+
+<ParamField body="private" type="boolean" required>
+  `true` to hide the share from the public profile; `false` to show it.
+</ParamField>
+
+**Response `200`** — `{ "private": true }`.
+
+---
+
+## Save Share to Drive
+
+```
+POST /api/shares/{token}/objects
+```
+
+Saves the contents of a share to the authenticated user's own drive. Scope: `objects:create`.
+
+<ParamField path="token" type="string" required>
+  The share token.
+</ParamField>
+
+<ParamField body="targetOrgId" type="string">
+  Destination workspace ID. Defaults to the user's personal workspace.
+</ParamField>
+
+<ParamField body="targetParent" type="string">
+  Destination folder path in the target workspace.
+</ParamField>
+
+**Response `201`**
+
+```json
+{
+  "saved": [{ "id": "01HQ...", "name": "report.pdf", "..." : "..." }],
+  "skipped": []
+}
+```
+
+---
+
+## Public Share URLs
+
+In addition to the API endpoints, ZPan serves share content at two short URLs:
+
+| URL | Description |
+|---|---|
+| `GET /s/{token}` | Landing page — shows a preview and download button for `landing` kind shares. |
+| `GET /r/{token}` | Direct download redirect — issues a `302` to the presigned S3 download URL for `direct` kind shares. |
+
+These URLs are designed for sharing with end users and are not part of the JSON API.

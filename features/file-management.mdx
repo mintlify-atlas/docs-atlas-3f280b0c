@@ -1,0 +1,147 @@
+---
+title: "File Management: S3-Backed Web Drive in ZPan"
+sidebarTitle: "File Management"
+description: "Manage files and folders with ZPan's web UI. Uploads go directly from browser to S3 via presigned URLs. Supports previews, trash, multi-part uploads, and folder navigation."
+---
+
+ZPan's file manager is a full-featured web drive built on top of S3-compatible object storage. Every file's bytes live in your bucket; ZPan only stores metadata in its database and acts as a control plane for auth, quota enforcement, and upload orchestration. No file ever transits the ZPan server — uploads and downloads go directly between the browser and your object storage via short-lived presigned URLs.
+
+## How Files Are Stored
+
+ZPan separates metadata from bytes at the data layer. When you upload a file, ZPan records a **Matter** row in the database that describes the file (name, size, parent folder, status, etc.) and instructs your S3-compatible bucket to hold the actual bytes under a server-assigned object key. The `object` field on each Matter record points to the exact key in the bucket.
+
+This means ZPan's database stays lightweight and the durability of your data is provided entirely by the backing object storage service. Deleting ZPan does not delete your files; they remain in the bucket until permanently removed.
+
+### The `Matter` Object
+
+Every file and folder is represented internally as a `Matter`. The wire schema returned by the API includes the following fields:
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | string | Opaque unique identifier |
+| `orgId` | string | Workspace (organization) this object belongs to |
+| `alias` | string | Short stable token used in share URLs |
+| `name` | string | Display name of the file or folder |
+| `type` | string | MIME type (files) or `"folder"` |
+| `size` | integer \| null | Size in bytes; `null` for folders |
+| `dirtype` | integer \| null | `0` = file, non-zero = directory variant |
+| `parent` | string | Slash-delimited parent path relative to the workspace root; empty for root items |
+| `object` | string | S3 object key for the stored bytes |
+| `storageId` | string | ID of the storage backend that holds the bytes |
+| `status` | string | Lifecycle state: `draft`, `active`, `trashed` |
+| `trashedAt` | integer \| null | Unix timestamp when trashed; `null` if not trashed |
+| `createdBy` | object \| null | Identity of the actor who created the object |
+| `createdAt` | string | ISO 8601 creation timestamp |
+| `updatedAt` | string | ISO 8601 last-modified timestamp |
+
+## Upload Flow
+
+Files never pass through the ZPan server. The upload protocol is a presigned-URL workflow that keeps server bandwidth usage at zero.
+
+<Steps>
+  <Step title="Create the object draft">
+    The client calls `POST /api/objects` (`createObject`) with the file's name, MIME type, size, and target parent folder. ZPan creates a draft Matter record, initiates the upload session (single or multipart), and returns upload instructions that include presigned PUT URLs for each part.
+  </Step>
+  <Step title="PUT parts directly to S3">
+    The client PUTs each file slice directly to the S3-compatible endpoint using the presigned URL for that part. No ZPan server is involved in the data path. Each successful PUT returns an `ETag` header that the client must record.
+  </Step>
+  <Step title="Complete the upload">
+    Once all parts are uploaded, the client calls `POST /api/objects/{id}/uploads/{uploadSessionId}/completions` (`completeObjectUpload`) with an array of `{ partNumber, etag }` records — one per uploaded part. ZPan finalizes the S3 upload, validates ETags, then promotes the draft Matter to `active` status.
+  </Step>
+</Steps>
+
+<Note>
+  If a presigned URL expires before the client finishes uploading its part, call `POST /api/objects/{id}/uploads/{uploadSessionId}/parts` (`presignObjectUploadParts`) with the list of missing part numbers to obtain fresh URLs. Re-signing never changes the workspace, object, session, storage key, or S3 multipart upload identity.
+</Note>
+
+To discard an unfinished upload, call `DELETE /api/objects/{id}/uploads/{uploadSessionId}` (`abortObjectUpload`). For multipart sessions this calls S3 `AbortMultipartUpload`; for single-PUT sessions it attempts to delete the partially written object.
+
+### Upload API Operations
+
+| Operation ID | Method and Path | Purpose |
+|---|---|---|
+| `createObject` | `POST /api/objects` | Create a folder, or create a file draft with upload instructions |
+| `presignObjectUploadParts` | `POST /api/objects/{id}/uploads/{uploadSessionId}/parts` | Re-sign a bounded list of missing upload part numbers |
+| `completeObjectUpload` | `POST /api/objects/{id}/uploads/{uploadSessionId}/completions` | Finalize a single or multipart upload with explicit part + ETag records |
+| `abortObjectUpload` | `DELETE /api/objects/{id}/uploads/{uploadSessionId}` | Abort an active upload session and discard the draft |
+
+## Multipart Uploads
+
+ZPan automatically switches to S3 multipart upload for large files. The v2.9 defaults are:
+
+| Parameter | Value |
+|---|---|
+| Part size | 64 MiB per part |
+| Presign TTL | 15 minutes per URL |
+| Re-signing | On-demand for expired parts only |
+
+For a 200 MiB file, ZPan creates four parts (three at 64 MiB and one at 8 MiB). The client PUTs each slice and records the returned ETag. Completion sends all four `{ partNumber, etag }` records in a single call; missing, duplicate, or out-of-range records are rejected before the file becomes active.
+
+<Tip>
+  When resuming an interrupted upload, call `presignObjectUploadParts` with only the part numbers that haven't been successfully PUT yet. Completed parts with known ETags do not need re-uploading.
+</Tip>
+
+## File Operations
+
+Once a file is active, the following operations are available through the web UI and API:
+
+| Operation | API | Notes |
+|---|---|---|
+| Rename | `PATCH /api/objects/{id}` | Updates the `name` field |
+| Move | `PATCH /api/objects/{id}` | Updates the `parent` field |
+| Copy (within workspace) | `POST /api/objects/{id}/copies` | Server-side S3 copy; quota charged to the target folder's org |
+| Transfer (to another space) | `POST /api/objects/{id}/transfers` | Copy-then-optionally-trash; quota moves with the file |
+| Trash (soft delete) | `DELETE /api/objects/{id}` | Sets status to `trashed`; file visible under the recycle bin |
+| Restore | `POST /api/trash/objects/{id}/restorations` | Returns status to `active` |
+| Permanent delete | `DELETE /api/trash/objects/{id}` | Removes the S3 object and the Matter record |
+
+<Warning>
+  Permanent deletion removes the S3 object immediately. There is no recovery path after permanent deletion.
+</Warning>
+
+## Folder Navigation and Breadcrumbs
+
+The file manager uses the `parent` field on each Matter for folder hierarchy. The root of a workspace is represented by an empty `parent` string. Nested folders carry slash-delimited paths such as `Documents/Projects`.
+
+The `GET /api/objects` endpoint accepts a `parent` (or `path`) query parameter to list the contents of any folder. The response includes a `hasChildren` boolean on each folder item so the UI can render expand indicators without fetching child lists eagerly.
+
+Breadcrumb navigation is built client-side by splitting the current `parent` path on `/` and linking each segment to its accumulated path prefix.
+
+## File Previews
+
+ZPan generates a presigned download URL when you call `GET /api/objects/{id}` on an active file. The web UI uses this URL to render in-browser previews for supported file types:
+
+- **Images** — JPEG, PNG, GIF, WebP rendered inline
+- **PDFs** — embedded browser PDF viewer
+- **Video** — MP4 and WebM via the HTML5 `<video>` element
+- **Code files** — syntax-highlighted in a read-only editor pane
+- **Markdown** — rendered with basic formatting
+
+Unsupported types show a download prompt instead of a preview.
+
+## Archive Operations
+
+ZPan supports compress and extract operations on files and folders as background jobs. These operations run asynchronously so that large archives do not block the UI thread.
+
+- **Compress** — Select one or more items and create a `.zip` archive in the same folder
+- **Extract** — Upload or select a `.zip` file and expand its contents into a target folder
+
+The resulting files appear in the file manager once the background job completes.
+
+## Quota Enforcement
+
+Every workspace (personal or team) has its own storage quota pool tracked in `org_quotas`. When `createObject` is called, ZPan checks whether the file size would exceed the workspace's remaining quota before creating the draft or starting the upload. If the quota is insufficient and a paid capacity offer is available, the API returns HTTP 402 with an `offers` array. If no offer is available and the quota is exceeded, it returns HTTP 422.
+
+Quota is charged to the **workspace that owns the file** (`matters.orgId`), never to the individual member who uploaded it. Moving a file to another workspace transfers the quota charge accordingly.
+
+```typescript
+// Quota-exceeded response shape (HTTP 422 — no available offer)
+{
+  error: "CAPACITY_REQUIRED",
+  requestHash: string,
+  requestedBytes: number,
+  usedBytes: number,
+  quotaBytes: number,
+  offers: []
+}
+```

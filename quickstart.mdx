@@ -1,47 +1,238 @@
 ---
-title: "Quickstart"
-description: "Begin with a guide on the fastest path to a successful outcome"
+title: "Get Started with ZPan in Under 5 Minutes"
+sidebarTitle: "Quickstart"
+description: "Deploy ZPan with Docker and connect an S3-compatible bucket. Start uploading files in under 5 minutes with no configuration file required."
 ---
 
-Describe how someone begins using your product. What is the first thing they need to do? Are there any prerequisites?
-
-A quickstart should take someone from zero to using your product. They'll get a quick win and a sense of what they can accomplish.
+The fastest way to run ZPan locally is with Docker Compose. This guide starts ZPan using a pre-built image from GitHub Container Registry and walks you through the complete onboarding flow — from first boot to your first shared file. No configuration file is required; every setting is applied through the web UI.
 
 ## Prerequisites
 
-Before you begin, you must have:
+- **Docker** and **Docker Compose** installed on your machine
+- An **S3-compatible bucket** — or use the RustFS option in Step 2 to spin up a local one alongside ZPan with a single command
 
-- Requirement one (for example, Node.js 18+, a free account, an API key)
-- Requirement two (for example, a compatible device, a compatible browser, a compatible operating system)
-
-## Get started
+## Setup
 
 <Steps>
-  <Step title="Install">
-    Describe how to install your product or sign up.
+
+  <Step title="Pull and start ZPan">
+    Download the official Docker Compose file and start the ZPan service and its bundled downloader agent:
 
     ```bash
-    npm install your-package
+    curl -O https://raw.githubusercontent.com/saltbo/zpan/main/deploy/docker-compose.yml
+    docker compose up -d
     ```
+
+    This pulls the pre-built `ghcr.io/saltbo/zpan:latest` image and starts two containers:
+
+    - **zpan** — the web UI and API control plane, listening on port `8222`
+    - **downloader** — the optional remote-download agent, which registers itself with ZPan automatically
+
+    The full `docker-compose.yml` used here is:
+
+    ```yaml
+    # Pull pre-built image from GHCR
+    # Usage: docker compose -f deploy/docker-compose.yml up -d
+
+    name: zpan
+
+    services:
+      zpan:
+        image: ghcr.io/saltbo/zpan:latest
+        ports:
+          - "8222:8222"
+        environment:
+          - PORT=8222
+          - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET:-}
+          - BETTER_AUTH_URL=${BETTER_AUTH_URL:-http://localhost:8222}
+          - DATABASE_URL=/data/zpan.db
+        volumes:
+          - zpan-data:/data
+        healthcheck:
+          test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8222/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+          interval: 5s
+          timeout: 3s
+          retries: 12
+          start_period: 10s
+        restart: unless-stopped
+
+      downloader:
+        image: ghcr.io/saltbo/zpan:latest-cli
+        hostname: zpan-downloader
+        command: ["--config", "/data/config.yaml", "downloader", "up"]
+        ports:
+          - "${ZPAN_BT_PORT:-6881}:${ZPAN_DOWNLOADER_BT_LISTEN_PORT:-6881}/tcp"
+          - "${ZPAN_BT_PORT:-6881}:${ZPAN_DOWNLOADER_BT_LISTEN_PORT:-6881}/udp"
+        environment:
+          - ZPAN_SERVER_URL=http://zpan:8222
+          - ZPAN_DOWNLOADER_ENGINE=${ZPAN_DOWNLOADER_ENGINE:-auto}
+          - ZPAN_DOWNLOADER_DOWNLOAD_DIR=/data/downloads
+          - ZPAN_DOWNLOADER_STATE_DIR=/data/state
+          - ZPAN_DOWNLOADER_BT_LISTEN_PORT=${ZPAN_DOWNLOADER_BT_LISTEN_PORT:-6881}
+          - ZPAN_DOWNLOADER_SEED_CACHE_LIMIT=${ZPAN_DOWNLOADER_SEED_CACHE_LIMIT:-10GB}
+        volumes:
+          - downloader-data:/data
+          - /etc/hostname:/host/etc/hostname:ro
+        depends_on:
+          zpan:
+            condition: service_healthy
+        restart: unless-stopped
+
+    volumes:
+      zpan-data:
+      downloader-data:
+    ```
+
+    <Note>
+      ZPan uploads and downloads files via **presigned S3 URLs** — the server never proxies file bytes. This means your storage endpoint must be reachable directly from the client browser, not just from inside Docker.
+    </Note>
   </Step>
-  <Step title="Configure">
-    Describe any setup or configuration needed before first use.
+
+  <Step title="(Optional) Use RustFS for self-hosted S3 storage">
+    If you do not have an S3 bucket ready, you can bring up RustFS — a lightweight, self-hosted S3-compatible object store — alongside ZPan in a single command. No external account or credit card is needed.
 
     ```bash
-    your-cli init
+    curl -O https://raw.githubusercontent.com/saltbo/zpan/main/deploy/docker-compose.rustfs.yml
+    docker compose -f docker-compose.rustfs.yml up -d
     ```
-  </Step>
-  <Step title="Run it">
-    Show the first thing a user does to see it working.
 
-    ```bash
-    your-cli start
+    This uses the following compose file, which adds a `rustfs` service to the ZPan stack:
+
+    ```yaml
+    # ZPan + RustFS (S3-compatible storage)
+    # Usage: docker compose -f deploy/docker-compose.rustfs.yml up -d
+    #
+    # RustFS console: http://localhost:9001  (admin / admin123)
+    # After startup, create a bucket in the RustFS console,
+    # then configure the storage provider in ZPan's admin panel.
+
+    name: zpan
+
+    services:
+      zpan:
+        image: ghcr.io/saltbo/zpan:latest
+        ports:
+          - "8222:8222"
+        environment:
+          - PORT=8222
+          - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET:-}
+          - BETTER_AUTH_URL=${BETTER_AUTH_URL:-http://localhost:8222}
+          - DATABASE_URL=/data/zpan.db
+        volumes:
+          - zpan-data:/data
+        depends_on:
+          rustfs:
+            condition: service_started
+        healthcheck:
+          test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8222/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+          interval: 5s
+          timeout: 3s
+          retries: 12
+          start_period: 10s
+        restart: unless-stopped
+
+      downloader:
+        image: ghcr.io/saltbo/zpan:latest-cli
+        hostname: zpan-downloader
+        command: ["--config", "/data/config.yaml", "downloader", "up"]
+        ports:
+          - "${ZPAN_BT_PORT:-6881}:${ZPAN_DOWNLOADER_BT_LISTEN_PORT:-6881}/tcp"
+          - "${ZPAN_BT_PORT:-6881}:${ZPAN_DOWNLOADER_BT_LISTEN_PORT:-6881}/udp"
+        environment:
+          - ZPAN_SERVER_URL=http://zpan:8222
+          - ZPAN_DOWNLOADER_ENGINE=${ZPAN_DOWNLOADER_ENGINE:-auto}
+          - ZPAN_DOWNLOADER_DOWNLOAD_DIR=/data/downloads
+          - ZPAN_DOWNLOADER_STATE_DIR=/data/state
+          - ZPAN_DOWNLOADER_BT_LISTEN_PORT=${ZPAN_DOWNLOADER_BT_LISTEN_PORT:-6881}
+          - ZPAN_DOWNLOADER_SEED_CACHE_LIMIT=${ZPAN_DOWNLOADER_SEED_CACHE_LIMIT:-10GB}
+        volumes:
+          - downloader-data:/data
+          - /etc/hostname:/host/etc/hostname:ro
+        depends_on:
+          zpan:
+            condition: service_healthy
+        restart: unless-stopped
+
+      rustfs:
+        image: rustfs/rustfs:latest
+        command: ["server", "/data", "--console-address", ":9001"]
+        ports:
+          - "9000:9000"
+          - "9001:9001"
+        environment:
+          - RUSTFS_ROOT_USER=admin
+          - RUSTFS_ROOT_PASSWORD=admin123
+        volumes:
+          - rustfs-data:/data
+        restart: unless-stopped
+
+    volumes:
+      zpan-data:
+      downloader-data:
+      rustfs-data:
     ```
+
+    Once the services are up, open the RustFS console at `http://localhost:9001` (username: `admin`, password: `admin123`) and create a bucket — for example, `zpan-bucket`. You will supply this bucket name in Step 5.
   </Step>
+
+  <Step title="Open the ZPan web UI">
+    With the containers running, navigate to:
+
+    ```
+    http://localhost:8222
+    ```
+
+    You should see the ZPan login and registration page. ZPan is ready to use — no further configuration file is needed before registering your first user.
+  </Step>
+
+  <Step title="Register the first user">
+    Click **Register** and fill in your email address and a password. The first user to register automatically receives the **admin** role, granting access to the Admin panel and all site settings.
+
+    <Note>
+      Subsequent users who register will be granted the default member role. You can manage user roles and restrict registrations from **Admin → Users** after your first login.
+    </Note>
+  </Step>
+
+  <Step title="Add your storage bucket">
+    Before you can upload files, ZPan needs to know which S3-compatible bucket to use.
+
+    1. In the top navigation, go to **Admin → Storage**.
+    2. Click **Add Storage** and fill in your bucket details:
+
+    | Field | Example value | Notes |
+    |---|---|---|
+    | **Endpoint** | `http://localhost:9000` | Must be reachable from your **browser**, not just from Docker |
+    | **Bucket** | `zpan-bucket` | The bucket you created in your S3 provider or RustFS console |
+    | **Region** | `us-east-1` | Use `us-east-1` for RustFS and MinIO; use your actual region for AWS S3 |
+    | **Access Key** | `admin` | Your provider's access key ID |
+    | **Secret Key** | `admin123` | Your provider's secret access key |
+
+    3. Click **Save**.
+
+    <Warning>
+      The **Endpoint** value must be accessible from the client browser. ZPan generates presigned URLs pointing to this endpoint, and the browser fetches them directly. Using a Docker-internal hostname such as `http://rustfs:9000` will cause uploads and downloads to fail in the browser. For local development use `http://localhost:9000`; for production use your server's public URL or domain.
+    </Warning>
+  </Step>
+
+  <Step title="Upload a file and create a share link">
+    You are now ready to use ZPan as your S3 web drive.
+
+    1. Return to the main **Files** view.
+    2. Click **Upload** and select any file from your device.
+
+    <Note>
+      Your browser uploads the file **directly to S3** using a presigned `PUT` URL returned by the ZPan server. File bytes never pass through the ZPan application server, keeping server bandwidth usage at zero regardless of file size.
+    </Note>
+
+    3. Once the upload completes, right-click the file (or open its context menu) and select **Share**.
+    4. Configure any optional share settings — password protection, expiration date, download limit — then click **Create Link**.
+    5. Copy the generated share URL and open it in a new browser tab to verify it works.
+
+    That's it. Your file is hosted in your own S3 bucket, accessible through a clean share link managed entirely by your ZPan instance.
+  </Step>
+
 </Steps>
 
 <Tip>
-  Give people a way to get help. This could be a link to a support page, a chat with a customer support agent, or a forum for your product.
-
-  Example: Need help? Reach out to us at [support@yourcompany.com](mailto:support@yourcompany.com).
+  This guide covers local development with Docker. For production deployments — including Cloudflare Workers (no VPS required), AWS Lambda, Cloud Run, and more — see the **Deploy** guides.
 </Tip>

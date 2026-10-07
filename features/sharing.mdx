@@ -1,0 +1,125 @@
+---
+title: "File Sharing with Links, Passwords, and Expiry"
+sidebarTitle: "Sharing"
+description: "Create share links for files and folders with optional password, expiry date, download limits, and direct URLs. Recipients can browse folders and save files to their own drive."
+---
+
+ZPan's sharing model follows the **distribution paradigm**: publishing a snapshot of a file or folder via a link so that recipients can view or save their own copy. This is intentionally different from per-item permission grants — there are no shared-folder ACLs or "Shared with me" mounted directories. When you share a file you publish it; when a recipient saves it they get an independent copy in their own workspace.
+
+## Share Types
+
+When creating a share you choose between two link types:
+
+| Kind | URL pattern | Behavior |
+|---|---|---|
+| `landing` | `/s/{token}` | Opens a landing page showing file info, preview, and download button |
+| `direct` | `/r/{token}` | Redirects immediately to the presigned download URL (or streams the file) |
+
+Landing-page links are better for sharing with people who need context or a preview before downloading. Direct links are better for embedding in tools, scripts, or image-hosting integrations where you want the raw file immediately.
+
+<Note>
+  Both link types respect password protection and expiry. A direct link to a password-protected share will prompt for the password before redirecting.
+</Note>
+
+## Share Options
+
+When creating a share (`POST /api/shares`), you can configure the following options:
+
+| Option | Description |
+|---|---|
+| `password` | Optional password recipients must enter before accessing the share |
+| `expiresAt` | ISO 8601 datetime after which the share is no longer accessible |
+| `downloadLimit` | Maximum number of times the file may be downloaded; `null` for unlimited |
+| `private` | When `true`, the share is hidden from the owner's public `/u/username` homepage |
+
+<Tip>
+  Download limits are per-share. Each unique download (by a unique visitor or by the same visitor after the deduplication window) counts toward the limit.
+</Tip>
+
+## The `ShareView` Schema
+
+When anyone fetches a share via `GET /api/shares/{token}`, ZPan returns a `ShareView` object with the following fields:
+
+| Field | Type | Description |
+|---|---|---|
+| `token` | string | Unique share token |
+| `kind` | string | `"landing"` or `"direct"` |
+| `status` | string | `"active"` or `"revoked"` |
+| `expiresAt` | string \| null | ISO 8601 expiry; `null` if no expiry set |
+| `downloadLimit` | integer \| null | Maximum downloads allowed; `null` for unlimited |
+| `requiresPassword` | boolean | Whether a password must be provided to access the share |
+| `expired` | boolean | `true` when the current time is past `expiresAt` |
+| `exhausted` | boolean | `true` when `downloadLimit` has been reached |
+| `accessibleByUser` | boolean | `true` when the current authenticated user can access the share |
+| `downloads` | integer | Number of downloads recorded so far |
+| `views` | integer | Number of page views recorded so far |
+| `matter` | object | Snapshot of the shared item: `name`, `type`, `size`, `isFolder` |
+| `creatorName` | string | Display name of the share creator |
+| `creatorUsername` | string \| null | Username of the creator, used to link to their public homepage |
+| `rootRef` | string | Opaque reference for downloading the root file or listing folder contents |
+
+Share creators additionally receive `id`, `matterId`, `orgId`, `creatorId`, `createdAt`, and `recipients` fields for management purposes.
+
+## Password-Protected Shares
+
+If `requiresPassword` is `true`, recipients must verify the password before accessing any content. The verification endpoint sets an HTTP-only cookie (`sameSite: Lax`) scoped to that token, so the browser automatically presents it on subsequent requests to the same share.
+
+<Steps>
+  <Step title="Fetch the share metadata">
+    `GET /api/shares/{token}` returns the `ShareView` with `requiresPassword: true`. The file content is not included.
+  </Step>
+  <Step title="Submit the password">
+    `POST /api/shares/{token}/sessions` with `{ "password": "..." }`. On success the server sets the access cookie and returns `{ "ok": true }`.
+  </Step>
+  <Step title="Access the content">
+    Subsequent requests to `GET /api/shares/{token}/objects` or the download endpoint carry the access cookie automatically.
+  </Step>
+</Steps>
+
+## Folder Shares
+
+When the shared item is a folder, recipients can browse its contents using `GET /api/shares/{token}/objects`. This endpoint accepts a `parent` query parameter for navigating into subfolders and returns a paginated list of items along with breadcrumb data.
+
+Folders that contain a `README.md` file expose it via `GET /api/shares/{token}/readme` — ZPan renders the markdown on the share landing page above the file listing.
+
+## Save-to-Drive
+
+Authenticated ZPan users can save a shared file or folder directly into their own workspace without downloading and re-uploading. The operation is a server-side S3 copy, so no bytes transit the user's browser.
+
+<Steps>
+  <Step title="Open the share landing page">
+    Navigate to `/s/{token}`. The landing page shows a **Save to Drive** button for authenticated users.
+  </Step>
+  <Step title="Choose a destination">
+    Select the target workspace and folder in the picker dialog. The picker reuses the same space/folder component as the file manager.
+  </Step>
+  <Step title="Confirm the save">
+    `POST /api/shares/{token}/objects` is called with `{ "targetOrgId": "...", "targetParent": "..." }`. ZPan recursively copies all files using S3 server-side copy and charges quota to the target workspace.
+  </Step>
+</Steps>
+
+The response includes a `saved` array of fully materialized Matter records and a `skipped` array listing any items that could not be copied along with the reason (for example, quota exceeded or name conflict).
+
+<Warning>
+  The save operation creates an independent copy. After saving, changes to the original file are not reflected in your copy, and deleting the original does not remove your saved version.
+</Warning>
+
+## Share Management
+
+### Listing Shares
+
+`GET /api/shares` returns a paginated list of shares you have created. You can filter by `status` (`active`, `revoked`) and by `box` to distinguish shares you created from those directed to you by other users.
+
+### Revoking Shares
+
+`PUT /api/shares/{token}/status` with `{ "status": "revoked" }` immediately invalidates the link. Existing recipients who try to access the share after revocation receive a 404 response.
+
+### Privacy Toggle
+
+`PUT /api/shares/{token}/privacy` with `{ "private": true }` hides the share from your public homepage. Only `landing`-type shares are eligible for public display; `direct` shares are always private.
+
+## Public User Homepage
+
+Every ZPan user with at least one public active share gets a personal page at `/u/{username}`. This page lists all non-private landing-type shares from that user, allowing visitors to browse a public file collection without a direct link to each individual share.
+
+Shares can be toggled off the public homepage individually using the privacy flag above, without revoking the link itself.

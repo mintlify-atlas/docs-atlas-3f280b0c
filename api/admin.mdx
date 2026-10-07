@@ -1,0 +1,284 @@
+---
+title: "Admin API: Site Management and Analytics"
+sidebarTitle: "Admin"
+description: "REST API for ZPan site administration. Manage storages, users, auth providers, branding, email config, licensing, and view site analytics."
+---
+
+The Admin API provides site-wide management capabilities available only to users with the site `admin` role. It covers S3-compatible storage backend management, user quota administration, site identity and registration settings, authentication provider configuration, email and SMTP setup, licensing, audit logs, and analytics dashboards.
+
+<Warning>
+  All Admin API endpoints require the caller to hold the site `admin` role. Authenticated non-admin users receive `403 Forbidden`. Each endpoint also requires the specific scope listed — an admin API key must be created with the required scopes.
+</Warning>
+
+---
+
+## Storage Management
+
+Storages are S3-compatible backends where ZPan stores file blobs. Multiple storages can be configured; ZPan auto-selects an available storage when creating objects unless the caller specifies a `storageId`.
+
+### Storage Schema
+
+<ResponseField name="id" type="string" required>Opaque storage identifier.</ResponseField>
+<ResponseField name="provider" type="string" required>Storage provider identifier (e.g. `aws`, `cloudflare`, `minio`).</ResponseField>
+<ResponseField name="bucket" type="string" required>S3 bucket name.</ResponseField>
+<ResponseField name="endpoint" type="string" required>S3-compatible endpoint URL.</ResponseField>
+<ResponseField name="region" type="string" required>AWS region or equivalent.</ResponseField>
+<ResponseField name="accessKey" type="string" required>Access key ID. The secret key is write-only and never returned.</ResponseField>
+<ResponseField name="filePath" type="string" required>Key prefix for all objects stored in this backend.</ResponseField>
+<ResponseField name="capacity" type="integer" required>Configured capacity limit in bytes (`0` for unlimited).</ResponseField>
+<ResponseField name="used" type="integer" required>Bytes currently used by stored files.</ResponseField>
+<ResponseField name="enabled" type="boolean" required>Whether this storage is available for new uploads.</ResponseField>
+<ResponseField name="status" type="string" required>Health status: `unknown`, `healthy`, or `unhealthy`.</ResponseField>
+<ResponseField name="statusReason" type="string | null" required>Reason for `unhealthy` status: `cors`, `authentication_failed`, `permission_denied`, `bucket_not_found`, `network_error`, or `unknown`.</ResponseField>
+<ResponseField name="statusCheckedAt" type="string | null" required>ISO 8601 timestamp of the last health check.</ResponseField>
+
+### Endpoints
+
+| Method | Path | Scope | Description |
+|---|---|---|---|
+| `GET` | `/api/admin/storages` | `storages:read` | List all configured storages. |
+| `POST` | `/api/admin/storages` | `storages:create` | Add a new storage backend. |
+| `GET` | `/api/admin/storages/{id}` | `storages:read` | Get a single storage. |
+| `PUT` | `/api/admin/storages/{id}` | `storages:update` | Replace a storage configuration. |
+| `PATCH` | `/api/admin/storages/{id}` | `storages:update` | Partially update a storage. |
+| `DELETE` | `/api/admin/storages/{id}` | `storages:delete` | Delete a storage (fails if files reference it). |
+| `PUT` | `/api/admin/storages/{id}/egress-billing` | `storages:update` | Update egress billing configuration. |
+
+<CodeGroup>
+
+```bash List storages
+curl -H 'Authorization: Bearer zpk_...' \
+  https://your-zpan.example/api/admin/storages
+```
+
+```bash Create storage
+curl -X POST https://your-zpan.example/api/admin/storages \
+  -H 'Authorization: Bearer zpk_...' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "provider": "aws",
+    "bucket": "my-zpan-bucket",
+    "endpoint": "https://s3.amazonaws.com",
+    "region": "us-east-1",
+    "accessKey": "AKIA...",
+    "secretKey": "...",
+    "filePath": "zpan/"
+  }'
+```
+
+</CodeGroup>
+
+---
+
+## User Management
+
+ZPan uses better-auth for identity; the `/api/auth/admin/*` endpoints handle user listing, disabling, and deletion. The ZPan Admin API supplements this with quota and entitlement management.
+
+### Endpoints
+
+| Method | Path | Scope | Description |
+|---|---|---|---|
+| `GET` | `/api/admin/users/{userId}/quota` | `users:read` | Get a user's storage usage and quota. |
+| `GET` | `/api/admin/users/{userId}/entitlements` | `user-entitlements:read` | List storage entitlements for a user. |
+| `POST` | `/api/admin/users/{userId}/entitlements` | `user-entitlements:create` | Grant a storage entitlement to a user. |
+| `PATCH` | `/api/admin/users/{userId}/entitlements/{eid}` | `user-entitlements:update` | Update a user entitlement. |
+| `DELETE` | `/api/admin/users/{userId}/entitlements/{eid}` | `user-entitlements:delete` | Revoke a user entitlement. |
+
+<CodeGroup>
+
+```bash Get user quota
+curl -H 'Authorization: Bearer zpk_...' \
+  https://your-zpan.example/api/admin/users/01HQ.../quota
+```
+
+</CodeGroup>
+
+**User Quota Response**
+
+```json
+{
+  "used": 1073741824,
+  "total": 10737418240,
+  "hasPersonalOrg": true
+}
+```
+
+---
+
+## Site Settings
+
+Site settings control the public identity, registration mode, default quotas, and feature flags for the entire ZPan instance. Scope: `site-settings:read` / `site-settings:update`.
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/admin/settings` | Get all editable site settings. |
+| `PUT` | `/api/admin/settings/identity` | Update site name, public URL, announcement text, and logo. |
+| `PUT` | `/api/admin/settings/registration` | Update registration mode (open, invite-only, closed). |
+| `PUT` | `/api/admin/settings/quotas` | Update default storage and traffic quotas for new users. |
+| `PUT` | `/api/admin/settings/captcha` | Configure CAPTCHA provider (Cloudflare Turnstile, etc.). |
+| `PUT` | `/api/admin/settings/webdav` | Configure WebDAV hostname and settings. |
+| `POST` | `/api/admin/settings/webdav/verifications` | Verify the configured WebDAV domain. |
+
+<CodeGroup>
+
+```bash Get site settings
+curl -H 'Authorization: Bearer zpk_...' \
+  https://your-zpan.example/api/admin/settings
+```
+
+</CodeGroup>
+
+---
+
+## Auth Providers
+
+Configure social and OIDC login providers. Scope: `auth-providers:read` / `auth-providers:update`.
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/admin/auth-providers` | List configured auth providers and their status. |
+| `PUT` | `/api/admin/auth-providers/{provider}` | Enable or update a provider (GitHub, Google, OIDC). |
+| `DELETE` | `/api/admin/auth-providers/{provider}` | Disable a provider. |
+
+---
+
+## Email Configuration
+
+Configure SMTP or Cloudflare Email Workers for transactional email. Scope: `email-config:read` / `email-config:update` / `email-config:test`.
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/admin/email-config` | Get current email configuration. |
+| `PUT` | `/api/admin/email-config` | Update SMTP or Cloudflare Email Workers settings. |
+| `POST` | `/api/admin/email-config/test` | Send a test email to verify the configuration. |
+
+<CodeGroup>
+
+```bash Send test email
+curl -X POST https://your-zpan.example/api/admin/email-config/test \
+  -H 'Authorization: Bearer zpk_...' \
+  -H 'Content-Type: application/json' \
+  -d '{"to": "admin@example.com"}'
+```
+
+</CodeGroup>
+
+---
+
+## Licensing
+
+Retrieve license and entitlement information for the ZPan instance. Scope: `licensing:read`.
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/admin/licensing` | Get current license status, plan name, and feature entitlements. |
+| `POST` | `/api/internal/licensing/refresh-runs` | Trigger a background refresh of license state from the ZPan Cloud licensing service. |
+
+---
+
+## Site Analytics
+
+Overview and time-series analytics for the ZPan instance dashboard. All analytics endpoints require the site `admin` role. Scope: `site-analytics:read`.
+
+### Site Overview
+
+```
+GET /api/admin/overview
+```
+
+Returns high-level site metrics: total users, total storage used, active objects, and share counts.
+
+<CodeGroup>
+
+```bash curl
+curl -H 'Authorization: Bearer zpk_...' \
+  https://your-zpan.example/api/admin/overview
+```
+
+</CodeGroup>
+
+**Response `200`** — `adminOverviewSchema` object containing aggregate counts across all users and workspaces.
+
+### Site Stats
+
+```
+GET /api/admin/stats
+```
+
+Returns time-series data for the analytics dashboard charts: user growth, storage growth, traffic (bytes transferred), and sharing activity.
+
+---
+
+## Audit Log
+
+The audit log records all significant actions performed on the site. Scope: `audit-events:read`.
+
+```
+GET /api/admin/audit
+```
+
+<ParamField query="page" type="integer">Page number (1-indexed).</ParamField>
+<ParamField query="pageSize" type="integer">Items per page.</ParamField>
+
+Each audit event includes `action`, `targetType`, `targetName`, `actorType`, `actorRef`, `userId`, `metadata`, and `createdAt`.
+
+---
+
+## Announcements
+
+Manage site-wide banner announcements shown to all users. Scope: `announcements:read` / `announcements:create` / `announcements:update` / `announcements:delete`.
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/admin/announcements` | List all announcements. |
+| `POST` | `/api/admin/announcements` | Create a new announcement. |
+| `PATCH` | `/api/admin/announcements/{id}` | Update announcement content or status. |
+| `DELETE` | `/api/admin/announcements/{id}` | Delete an announcement. |
+
+---
+
+## Image Domain Provider
+
+Configure the DNS provider used for custom image hosting domain verification. Scope: `image-domain-provider:read` / `image-domain-provider:update`.
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/admin/image-domain-provider` | Get the current DNS provider configuration. |
+| `PUT` | `/api/admin/image-domain-provider` | Set provider to `manual` or `cloudflare`, with provider-specific settings. |
+| `POST` | `/api/admin/image-domain-provider/test` | Test the DNS provider credentials. |
+
+---
+
+## Invite Codes
+
+When registration is set to invite-only, users must have a valid invite code to register. Scope: `invite-codes:read` / `invite-codes:create` / `invite-codes:delete`.
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/admin/invite-codes` | List all invite codes and their usage status. |
+| `POST` | `/api/admin/invite-codes` | Generate one or more invite codes. |
+| `DELETE` | `/api/admin/invite-codes/{id}` | Delete an invite code. |
+
+---
+
+## Background Jobs
+
+Background jobs handle asynchronous tasks such as archive compression and extraction. Scope: `background-jobs:read`.
+
+```
+GET /api/admin/background-jobs
+```
+
+Returns a list of recent background job executions with their status, type, and timing information.
+
+---
+
+## Quota Overview
+
+```
+GET /api/admin/quotas
+```
+
+Returns an overview of storage quota usage across all workspaces (personal and team). Scope: `quota:read`. Requires site `admin` role.
+
+**Response `200`** — paginated list of `QuotaOverviewItem` records. Each item includes `orgId`, `orgName`, `orgType`, `used`, `quota`, `trafficUsed`, `trafficQuota`, and the effective plan name.

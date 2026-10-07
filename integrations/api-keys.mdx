@@ -1,0 +1,166 @@
+---
+title: "API Key Authentication for ZPan Automation"
+sidebarTitle: "API Keys"
+description: "Create scoped API keys in ZPan for automation, CI/CD, and tool integrations. Keys use Bearer token authentication and support fine-grained permission scopes."
+---
+
+API keys are long-lived credentials designed for non-interactive access to ZPan. Unlike session cookies, which are issued after a browser login and expire with the session, API keys persist until explicitly revoked. They are the right choice for automation scripts, CI/CD pipelines, desktop upload tools, WebDAV clients, and any other programmatic integration that cannot complete an interactive sign-in flow.
+
+## Creating an API Key
+
+ZPan offers two entry points for key creation, depending on the intended use:
+
+- **Image hosting keys** — navigate to **Settings → Image Hosting → API Keys**. These keys are pre-scoped for the image upload workflow and are also the source for the Tool Integration panel configuration.
+- **General-purpose keys** — navigate to **Settings → API Keys**. These keys can be assigned any combination of scopes.
+
+When creating a key, choose a descriptive name (for example `ci-deploy` or `sharex-upload`) and select only the scopes the key requires. After clicking **Create**, copy the key value from the dialog.
+
+<Warning>
+  The key is displayed exactly once. ZPan stores only a hash of the key server-side and cannot recover the plaintext. If you lose the key before saving it, revoke it and create a new one.
+</Warning>
+
+---
+
+## Using a Key in Requests
+
+Send the key as a Bearer token in the `Authorization` header of every API request:
+
+```bash
+curl -H 'Authorization: Bearer <your-key>' \
+  https://your-zpan.example/api/objects
+```
+
+API keys use the same route policy evaluator as session cookies and OAuth tokens. Possessing a scope does not bypass workspace role checks — a key with a write scope still needs editor membership in the target workspace.
+
+---
+
+## Permission Scopes
+
+Every API key carries a set of scopes that define what it is allowed to do. Scopes follow the `<resource>:<action>` pattern. A key with no scopes cannot access any protected endpoint.
+
+### Objects
+
+| Scope | Description |
+|---|---|
+| `objects:read` | List and download files |
+| `objects:create` | Upload new files |
+| `objects:update` | Rename or move existing files |
+| `objects:delete` | Move files to trash |
+| `objects:purge` | Permanently delete files (irreversible) |
+
+### Shares
+
+| Scope | Description |
+|---|---|
+| `shares:read` | List share links |
+| `shares:create` | Create new share links |
+| `shares:delete` | Remove share links |
+
+### Images
+
+| Scope | Description |
+|---|---|
+| `images:upload` | Upload images via the image hosting endpoint (`/api/ihost/images`) |
+| `images:read` | Read image metadata |
+| `images:create` | Create image records |
+| `images:update` | Update image metadata |
+| `images:delete` | Delete images |
+
+### Image Hosting Config
+
+| Scope | Description |
+|---|---|
+| `image-hosting-config:read` | Read image hosting configuration |
+| `image-hosting-config:update` | Update image hosting configuration |
+| `image-hosting-config:delete` | Delete image hosting configuration |
+
+### Download Tasks
+
+| Scope | Description |
+|---|---|
+| `download-tasks:read` | List and inspect remote download tasks; also required for the API key SSE event stream |
+| `download-tasks:create` | Submit new remote download tasks |
+| `download-tasks:cancel` | Cancel in-progress download tasks |
+
+### Quota
+
+| Scope | Description |
+|---|---|
+| `quota:read` | Read workspace storage and traffic quota |
+| `quota:purchase` | Purchase additional quota capacity |
+
+### Storage Usage
+
+| Scope | Description |
+|---|---|
+| `storage-usage:read` | Read current storage consumption statistics |
+
+### Background Jobs
+
+| Scope | Description |
+|---|---|
+| `background-jobs:read` | List background job status |
+| `background-jobs:create` | Enqueue new background jobs |
+| `background-jobs:update` | Update background job configuration |
+
+### Downloaders
+
+| Scope | Description |
+|---|---|
+| `downloaders:read` | List configured downloader instances |
+| `downloaders:create` | Add a new downloader |
+| `downloaders:update` | Update an existing downloader |
+| `downloaders:delete` | Remove a downloader |
+
+### OAuth Grants
+
+| Scope | Description |
+|---|---|
+| `oauth-grants:read` | List active OAuth grants |
+| `oauth-grants:create` | Create OAuth grants |
+| `oauth-grants:delete` | Revoke OAuth grants |
+
+---
+
+## Predefined Key Templates
+
+The ZPan UI offers three built-in scope presets when creating a key. You can use them as a starting point and adjust individual scopes before saving.
+
+| Template | Scopes Included | Typical Use Case |
+|---|---|---|
+| **Image Hosting (ihost)** | `images:upload` | Screenshot tools, PicGo, uPic, ShareX, Flameshot |
+| **WebDAV** | `objects:read`, `objects:create`, `objects:update`, `objects:delete`, `shares:read`, `quota:read`, `storage-usage:read` | WebDAV client mount |
+| **Remote Download** | `download-tasks:read`, `download-tasks:create`, `download-tasks:cancel` | Automated download managers, remote fetch jobs |
+
+<Tip>
+  The **Image Hosting** template is the minimum viable key for any screenshot or image upload tool integration. Avoid granting broader scopes unless your workflow specifically requires them.
+</Tip>
+
+---
+
+## SSE Event Stream with an API Key
+
+ZPan exposes a Server-Sent Events stream at `GET /api/events` for real-time download task updates. Browser sessions receive job, notification, and download-task events. API keys receive a filtered stream containing **only download tasks** from their workspace.
+
+To open the stream, append `?downloadTasks=1` to the request and include your key as a Bearer token:
+
+```bash
+curl -H 'Authorization: Bearer <your-key>' \
+  'https://your-zpan.example/api/events?downloadTasks=1'
+```
+
+The key must have the `download-tasks:read` scope. Requests with a valid key but without that scope receive `403 Forbidden`. Requests without any valid credential receive `401 Unauthorized`.
+
+<Note>
+  The `downloadTasks=1` parameter is required for API key access. Without it, the server will not activate the download-task-only stream mode for key-authenticated requests.
+</Note>
+
+---
+
+## Revoking a Key
+
+To revoke an API key, navigate to **Settings → API Keys** (or **Settings → Image Hosting → API Keys** for image hosting keys) and click **Revoke** next to the key. Revocation is immediate — any in-flight request using that key will be rejected as soon as the server validates the credential.
+
+<Warning>
+  Revoking a key cannot be undone. If a key is accidentally committed to version control or otherwise exposed, revoke it immediately and create a replacement.
+</Warning>

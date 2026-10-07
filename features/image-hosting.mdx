@@ -1,0 +1,230 @@
+---
+title: "Image Hosting with API Keys and Tool Integrations"
+sidebarTitle: "Image Hosting"
+description: "ZPan provides an image hosting endpoint for screenshots and uploads. Integrate with PicGo, PicList, uPic, ShareX, Flameshot, or use the REST API directly."
+---
+
+ZPan's image hosting feature turns your S3-backed workspace into a personal image bed. After enabling it and creating an API key, you can upload images via a single HTTP endpoint and receive a stable public URL in response — exactly the contract that screenshot tools and image uploaders expect.
+
+## Enabling Image Hosting
+
+Image hosting is disabled by default and must be enabled per workspace.
+
+<Steps>
+  <Step title="Open workspace settings">
+    Navigate to **Settings → Image Hosting** in the ZPan web UI.
+  </Step>
+  <Step title="Enable image hosting">
+    Toggle **Enable Image Hosting** on. ZPan records this for your workspace and begins accepting uploads at the image hosting endpoint.
+  </Step>
+  <Step title="Create an API key">
+    Go to **Settings → Image Hosting → API Keys** and click **New Key**. Give the key a descriptive label such as "PicGo" or "ShareX". The key is shown exactly once at creation time — copy it immediately.
+  </Step>
+</Steps>
+
+<Warning>
+  API keys are hashed server-side immediately after creation. ZPan never stores or transmits the plaintext key again. If you lose the key, revoke it and create a new one. Keys can be revoked any time under **Settings → Image Hosting → API Keys**.
+</Warning>
+
+## Upload Endpoint
+
+```
+POST /api/ihost/images
+```
+
+This endpoint accepts `multipart/form-data` or `application/json` (base64) bodies. It is authenticated via a Bearer token in the `Authorization` header using an API key with the `images:upload` scope.
+
+### Multipart Form Upload
+
+```bash
+curl -X POST https://your-zpan.example/api/ihost/images \
+  -H "Authorization: Bearer <your-api-key>" \
+  -F "file=@screenshot.png" \
+  -F "path=screenshots/2024/01/screenshot.png"
+```
+
+| Field | Required | Description |
+|---|---|---|
+| `file` | Yes | The image file to upload |
+| `path` | No | Storage path override; defaults to the filename |
+
+### Supported Image Types
+
+| MIME type | Extension |
+|---|---|
+| `image/png` | `.png` |
+| `image/jpeg` | `.jpg`, `.jpeg` |
+| `image/gif` | `.gif` |
+| `image/webp` | `.webp` |
+
+SVG uploads are rejected. MIME type is detected from magic bytes when the client-supplied type is missing or generic.
+
+### Response
+
+A successful upload returns HTTP 201 with the following JSON body:
+
+```json
+{
+  "data": {
+    "url": "https://your-zpan.example/r/abc123.png",
+    "urlAlt": "https://your-zpan.example/r/abc123.png",
+    "markdown": "![](https://your-zpan.example/r/abc123.png)",
+    "html": "<img src=\"https://your-zpan.example/r/abc123.png\" />",
+    "bbcode": "[img]https://your-zpan.example/r/abc123.png[/img]"
+  }
+}
+```
+
+Most tools read the `data.url` field directly. The `jsonPath` for these tools is `data.url`.
+
+## Custom Domains
+
+When a verified custom domain is configured for image hosting (Pro/Business feature), the `url` field in the response reflects that domain rather than the default ZPan origin. This lets you serve images from `images.yourdomain.com` while the ZPan control plane remains on a different hostname.
+
+Custom domain configuration lives in **Admin Settings → Image Custom Domains**. A separate zone-scoped Cloudflare API token (distinct from the deployment token) is required to provision Cloudflare for SaaS hostnames.
+
+<Note>
+  The `urlAlt` field always contains the token-based fallback URL (`/r/{token}.{ext}`) regardless of custom domain configuration. This fallback remains valid if the custom domain is later removed.
+</Note>
+
+## Tool Integrations
+
+All configuration snippets below are generated client-side from your API key in the **Settings → Image Hosting → Tool Integration** panel. The pasted key is ephemeral — it is never persisted to `localStorage` or sent to the server.
+
+### PicGo and PicList
+
+PicGo is a cross-platform image uploader with a plugin ecosystem. PicList is a maintained fork with the same plugin format.
+
+**Install the plugin:**
+
+```bash
+# CLI install
+picgo install picgo-plugin-web-uploader
+
+# Or use the GUI Plugin Manager: search for "web-uploader" and install
+```
+
+**Configure the custom uploader:**
+
+1. Open PicGo → **Settings** → **Uploader** → **Custom Web**.
+2. Paste the generated JSON from the Tool Integration panel.
+3. Set **Custom Web** as the default uploader.
+4. Click **Test** to verify the upload works.
+
+The generated configuration JSON:
+
+```json
+{
+  "url": "https://<your-zpan-host>/api/ihost/images",
+  "paramName": "file",
+  "jsonPath": "data.url",
+  "customHeader": "{\"Authorization\":\"Bearer <your-key>\"}",
+  "customBody": "{\"path\":\"{year}/{month}/{fileName}\"}"
+}
+```
+
+### uPic (macOS)
+
+uPic is a macOS image uploader that supports custom HTTP hosts.
+
+**Manual configuration fields:**
+
+| Field | Value |
+|---|---|
+| API URL | `https://<host>/api/ihost/images` |
+| File Form Key | `file` |
+| Authorization Header | `Bearer <your-key>` |
+| Response Field | `data.url` |
+
+Alternatively, generate and save the config JSON from the Tool Integration panel, then use **File → Import Config** in uPic to load it in one step.
+
+### ShareX (Windows)
+
+ShareX supports custom upload targets via `.sxcu` configuration files.
+
+<Steps>
+  <Step title="Download the config file">
+    Generate and download `zpan-ihost.sxcu` from the Tool Integration panel.
+  </Step>
+  <Step title="Import into ShareX">
+    Double-click the `.sxcu` file — ShareX automatically imports it as a custom uploader.
+  </Step>
+  <Step title="Set as active destination">
+    Go to **Destinations** → **Custom Uploader Settings** and verify "ZPan Image Host" is listed. Then set it as active under **Destinations → Image Uploader**.
+  </Step>
+</Steps>
+
+The `.sxcu` file format:
+
+```json
+{
+  "Version": "15.0.0",
+  "Name": "ZPan Image Host",
+  "DestinationType": "ImageUploader, FileUploader",
+  "RequestMethod": "POST",
+  "RequestURL": "https://<host>/api/ihost/images",
+  "Headers": { "Authorization": "Bearer <your-key>" },
+  "Body": "MultipartFormData",
+  "FileFormName": "file",
+  "Arguments": { "path": "%y/%mo/$filename$" },
+  "URL": "{json:data.url}",
+  "ErrorMessage": "{json:error}"
+}
+```
+
+### Flameshot (Linux)
+
+Flameshot is an open-source screenshot tool with scripting support. The integration uses `curl` to POST a screenshot directly from the capture pipeline.
+
+**Requirements:** `curl`, `jq`, and either `xclip` (X11) or `wl-clipboard` (Wayland).
+
+<Steps>
+  <Step title="Save the upload script">
+    Copy the generated script from the Tool Integration panel and save it:
+
+    ```bash
+    chmod +x ~/bin/zpan-upload.sh
+    ```
+  </Step>
+  <Step title="Capture and upload">
+    Pipe a Flameshot capture directly to the script:
+
+    ```bash
+    flameshot gui --raw | ~/bin/zpan-upload.sh
+    ```
+  </Step>
+  <Step title="Bind a keyboard shortcut">
+    Optionally, bind the pipeline command as a keyboard shortcut in your desktop environment for one-key capture-and-upload.
+  </Step>
+</Steps>
+
+The upload script:
+
+<CodeGroup>
+```bash X11
+IHOST_KEY="<your-key>"
+flameshot gui --raw | curl \
+  -H "Authorization: Bearer $IHOST_KEY" \
+  -F "file=@-" \
+  -F "path=screenshots/$(date +%Y/%m)/$(date +%s).png" \
+  https://<host>/api/ihost/images \
+  | jq -r '.data.url' | xclip -selection clipboard
+```
+
+```bash Wayland
+IHOST_KEY="<your-key>"
+flameshot gui --raw | curl \
+  -H "Authorization: Bearer $IHOST_KEY" \
+  -F "file=@-" \
+  -F "path=screenshots/$(date +%Y/%m)/$(date +%s).png" \
+  https://<host>/api/ihost/images \
+  | jq -r '.data.url' | wl-copy
+```
+</CodeGroup>
+
+## Security Notes
+
+- API keys are hashed on the server using a one-way function. ZPan cannot recover a lost plaintext key.
+- Never share your API key or commit it to version control.
+- Keys can be revoked at any time from **Settings → Image Hosting → API Keys** without affecting other keys.
+- The Tool Integration panel accepts a pasted key ephemerally for generating config snippets — it is never persisted to `localStorage` or transmitted to the server after initial generation.

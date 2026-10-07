@@ -1,0 +1,173 @@
+---
+title: "Configure a Dedicated WebDAV Custom Domain"
+sidebarTitle: "WebDAV Domain"
+description: "Set up a dedicated hostname for WebDAV access in ZPan. Cloudflare Workers auto-configures the dav. subdomain; Docker and other runtimes require reverse proxy setup."
+---
+
+When WebDAV is enabled, ZPan serves the WebDAV protocol internally at the `/dav/` path. This path always remains available. Optionally, you can give WebDAV its own dedicated hostname — for example, `dav.files.example.com` — so that WebDAV clients mount a clean root URL instead of a path-based one. How you set this up depends on your deployment runtime.
+
+## How the Dedicated Hostname Is Derived
+
+By default, ZPan derives the dedicated WebDAV hostname by prepending `dav.` to the hostname from **Admin Settings → Public URL**. If your Public URL is `https://files.example.com`, the derived WebDAV hostname is `dav.files.example.com`.
+
+To use a completely different hostname, set a custom value in **Admin Settings → WebDAV → Domain**. The value must be a hostname only — no protocol, port, or path (e.g. `webdav.mycompany.com`).
+
+<Note>
+Until the dedicated hostname has been verified, ZPan advertises the path-based `/dav/` endpoint in all client-facing WebDAV setup instructions and the `configz` document. After successful verification, ZPan switches to advertising the dedicated hostname. The `/dav/` path continues to work regardless of verification status.
+</Note>
+
+## Verification
+
+Regardless of your deployment runtime, ZPan verifies the dedicated hostname by sending an unauthenticated `OPTIONS` request to it and checking for ZPan's WebDAV authentication challenge in the response. Trigger verification from **Admin Settings → WebDAV → Verify domain** once DNS and your proxy are configured.
+
+<Warning>
+Changing **Public URL** in Admin Settings automatically invalidates the previous WebDAV domain verification. If you update the Public URL, reconfigure your DNS and proxy for the new derived hostname and verify again before clients are updated.
+</Warning>
+
+---
+
+## Cloudflare Workers
+
+On Cloudflare Workers, the deployment workflow automates the dedicated hostname setup. No manual proxy configuration is needed.
+
+### How the Workflow Configures the Hostname
+
+<Steps>
+  <Step title="Ensure a primary Worker Custom Domain is set">
+    The deployment workflow looks for a Custom Domain already attached to the `zpan` Worker (e.g. `files.example.com`). This is the domain you configured as your Worker's Custom Domain in Cloudflare. If no Custom Domain is attached, the workflow skips the dedicated WebDAV hostname and `/dav/` remains available.
+  </Step>
+  <Step title="Extend the API token permissions">
+    The existing `CLOUDFLARE_API_TOKEN` used by GitHub Actions for deployment must also have **Transform Rules:Edit** permission for the zone. Add this permission to the token in the Cloudflare dashboard if it is not already present.
+  </Step>
+  <Step title="Run the deployment workflow">
+    Trigger the **Deploy to Cloudflare Workers** GitHub Actions workflow. The workflow:
+    - Derives the `dav.<primary-hostname>` hostname
+    - Creates a hostname-only Transform Rule that rewrites requests at the root of the DAV hostname to `/dav` before Worker dispatch
+    - Attaches the derived hostname as another Worker Custom Domain
+    - Verifies the WebDAV authentication challenge
+    - Records the verified origin in D1 so ZPan can advertise it
+  </Step>
+</Steps>
+
+**Behavior details:**
+
+- The workflow uses a `zpan_webdav_` prefix on any rules it creates. It does not modify or delete unrelated Transform Rules in your zone.
+- Normal application asset requests on the primary hostname continue to bypass the Worker (the `run_worker_first` list is not widened). Only requests to the dedicated DAV hostname are rewritten.
+- If the Worker has **multiple** primary Custom Domains, the workflow fails rather than picking one arbitrarily. Assign exactly one primary domain or configure a custom WebDAV hostname manually.
+- For a fully custom WebDAV hostname (set in Admin Settings → WebDAV → Domain), configure that hostname as a Worker Custom Domain manually and add an equivalent rewrite rule. The automated workflow only handles the derived `dav.` hostname.
+
+---
+
+## Docker and Other Reverse Proxies
+
+For Docker, AWS Lambda, Vercel, Netlify, Azure, Cloud Run, and any other runtime, configure a reverse proxy in front of ZPan to handle the dedicated hostname. ZPan does not configure your external infrastructure — the verification step confirms your proxy is set up correctly.
+
+### Reverse Proxy Contract
+
+The proxy must satisfy all of the following conditions for ZPan to serve WebDAV correctly:
+
+<Steps>
+  <Step title="Route the dedicated hostname to ZPan">
+    Configure DNS so that the WebDAV hostname (e.g. `dav.files.example.com`) resolves to your ZPan server or load balancer. Then configure the reverse proxy to accept requests for that hostname and forward them to ZPan.
+  </Step>
+  <Step title="Prefix every request path with /dav">
+    All incoming requests to the dedicated hostname must have `/dav` prepended to their path **before** they reach ZPan. Do not issue a redirect — the prefix must be applied internally.
+
+    For example, an external request to `GET /Workspace/file.txt` on `dav.files.example.com` must reach ZPan as `GET /dav/Workspace/file.txt`. ZPan then emits root-relative WebDAV resource paths such as `/Workspace/file.txt` in its responses.
+  </Step>
+  <Step title="Preserve the original Host header and WebDAV headers">
+    The proxy must forward the original `Host` header unchanged. It must also preserve the following WebDAV-specific request headers:
+
+    | Header | Purpose |
+    |---|---|
+    | `Destination` | Target URL for `COPY` and `MOVE` operations |
+    | `If` | Conditional request header used by locking clients |
+    | `Depth` | Controls recursion depth for `PROPFIND` and `COPY` |
+    | `Overwrite` | Controls whether `COPY` and `MOVE` overwrite existing resources |
+    | `Lock-Token` | Token for releasing and refreshing locks |
+
+    Dropping any of these headers breaks standard WebDAV operations. Filesystem clients such as macOS Finder, Cyberduck, and Windows WebDAV rely on all of them.
+  </Step>
+  <Step title="Preserve the HTTP method, query string, and request body">
+    WebDAV uses non-standard methods (`PROPFIND`, `MKCOL`, `COPY`, `MOVE`, `LOCK`, `UNLOCK`). Ensure your proxy passes all HTTP methods through unchanged, does not discard the query string, and streams the request body without modification.
+  </Step>
+</Steps>
+
+### Example: Caddy
+
+```
+dav.files.example.com {
+  reverse_proxy /dav/* zpan:8222
+  rewrite * /dav{uri}
+  reverse_proxy zpan:8222
+}
+```
+
+### Example: Nginx
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name dav.files.example.com;
+
+    # TLS configuration here
+
+    location / {
+        # Rewrite root requests to /dav prefix
+        rewrite ^/(.*)$ /dav/$1 break;
+
+        proxy_pass http://zpan:8222;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+
+        # WebDAV headers
+        proxy_set_header Destination $http_destination;
+        proxy_set_header If $http_if;
+        proxy_set_header Depth $http_depth;
+        proxy_set_header Overwrite $http_overwrite;
+        proxy_set_header Lock-Token $http_lock_token;
+
+        # Allow all HTTP methods including WebDAV verbs
+        proxy_pass_request_headers on;
+    }
+}
+```
+
+<Note>
+The above examples show the proxy contract. Your actual configuration may differ based on your infrastructure. The critical requirement is that `/dav` is prepended to every path and all WebDAV headers are forwarded.
+</Note>
+
+### Triggering Verification
+
+After DNS propagates and your reverse proxy is running:
+
+<Steps>
+  <Step title="Open Admin Settings → WebDAV">
+    Navigate to **Admin Settings → WebDAV** in the ZPan admin panel.
+  </Step>
+  <Step title="Click Verify domain">
+    ZPan sends an unauthenticated `OPTIONS` request to the configured or derived dedicated hostname. It accepts the domain as verified when it receives ZPan's WebDAV authentication challenge in the response.
+  </Step>
+  <Step title="Confirm verification status">
+    The current verification status is displayed in the WebDAV settings panel. After successful verification, ZPan updates its advertised WebDAV URL to the dedicated hostname.
+  </Step>
+</Steps>
+
+If verification fails, check:
+- DNS is fully propagated for the hostname
+- Your proxy is running and accepting requests for the hostname
+- The `/dav` path prefix is being applied correctly
+- The proxy is not stripping the `Host` header or WebDAV-specific headers
+
+---
+
+## Connecting a WebDAV Client
+
+Once the dedicated hostname is verified (or using the path-based endpoint), connect any standard WebDAV client:
+
+| Client | Connection URL |
+|---|---|
+| Dedicated hostname (after verification) | `https://dav.files.example.com/` |
+| Path-based (always available) | `https://files.example.com/dav/` |
+
+WebDAV authentication uses API keys. Each user generates a dedicated WebDAV API key from their account settings. The key provides access to all workspaces the user is a member of.

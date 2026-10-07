@@ -1,0 +1,139 @@
+---
+title: "Teams and Workspaces with Independent Quota"
+sidebarTitle: "Teams"
+description: "Create team workspaces in ZPan with independent storage quotas, member roles, and separate billing. Team files persist when members leave."
+---
+
+ZPan organizes storage into **workspaces** (called organizations, or orgs, internally). Every user has a personal workspace, and any user can create additional team workspaces. Personal and team workspaces are fully independent: each has its own storage quota pool, its own file tree, and its own billing. Switching workspaces in the web UI swaps your active context for browsing, uploading, and sharing.
+
+## Personal vs. Team Workspaces
+
+| Aspect | Personal workspace | Team workspace |
+|---|---|---|
+| Members | Single user (you) | Multiple users with roles |
+| Quota ownership | Funded by the user | Funded by the team owner |
+| Files owner | The user | The team (not any individual member) |
+| File survival on departure | N/A | Files remain after any member leaves |
+| Per-item ACL | Not supported — one owner | Not supported in v2; team RBAC is future work |
+
+The key principle: **a space owns its data.** Usage is always charged to the space, never to the individual uploader. When a team member leaves, every file they uploaded remains in the team's quota — the team owns them, not the member.
+
+## Creating a Team
+
+<Steps>
+  <Step title="Open the workspace switcher">
+    Click your workspace name in the sidebar to open the active space switcher.
+  </Step>
+  <Step title="Create a new team">
+    Click **New Team**. Enter a team name. The team slug is derived automatically from the name.
+  </Step>
+  <Step title="Configure quota (admin)">
+    After creation, an instance admin can set the team's storage quota in **Admin → Teams → {team} → Quota**. On hosted ZPan (Pro/Business), the team owner can purchase a quota subscription in the team context.
+  </Step>
+</Steps>
+
+## Member Roles
+
+Teams support two member roles:
+
+| Role | Permissions |
+|---|---|
+| `owner` | Full access: manage members, invite links, billing, quota, settings, and all files |
+| `editor` | Create, update, and delete files; create shares; run download tasks |
+| `viewer` | Read-only access to files and shares |
+
+<Note>
+  Only the team **owner** can purchase quota, subscribe to a plan, or access the billing portal for a team workspace. Members with `editor` or `viewer` roles see guidance to contact their team owner instead of buy buttons.
+</Note>
+
+## Quota Ownership
+
+Each workspace (personal or team) holds its own `org_quotas` row with an independent storage pool. Quota is never shared across workspaces and is never charged to an individual member's personal wallet.
+
+**Three ways to fund team quota:**
+
+| Scenario | Method |
+|---|---|
+| Formal team or company | Team owner purchases directly in the team context |
+| Self-hosted instance | Instance admin grants an entitlement via the admin API |
+| No external billing | Admin sets a default allocation in **Admin → Settings → Default team quota** |
+
+When the team quota is exhausted, uploads to the team workspace return HTTP 422 (or HTTP 402 with purchase offers on hosted ZPan) until more quota is added.
+
+<Warning>
+  Quota is not shared between a user's personal workspace and their team workspaces. Buying extra quota for your personal account does not give the team more space — purchase or grant quota in the team context.
+</Warning>
+
+## Inviting Team Members
+
+Team members are invited via a one-time invite link. Only users with the `owner` role (or admins) can create invite links.
+
+<Steps>
+  <Step title="Create an invite link">
+    Go to **Team Settings → Members → Invite** or call `POST /api/teams/{teamId}/invite-links` with a `role` and optional `expiresIn` (seconds until the link expires).
+  </Step>
+  <Step title="Share the link">
+    Copy the generated link and send it to the invitee via email or another channel. The token in the link is a one-time-use opaque token.
+  </Step>
+  <Step title="Invitee joins">
+    The invitee opens the link, sees the team name and offered role in the invite landing page, and clicks **Join**. ZPan calls `POST /api/teams/{teamId}/members` internally and adds them as a member.
+  </Step>
+</Steps>
+
+Pending invitations (those not yet accepted) are listed via `GET /api/teams/{teamId}/invitations`. Invite links expire if an `expiresIn` was set or if the link is explicitly revoked.
+
+### Invite Link API
+
+```typescript
+// Create an invite link
+POST /api/teams/{teamId}/invite-links
+{
+  "role": "editor",  // "editor" | "viewer"
+  "expiresIn": 86400 // seconds; optional
+}
+
+// Response
+{
+  "token": "abc123...",
+  "expiresAt": "2024-12-31T23:59:59.000Z"
+}
+```
+
+## Switching Workspaces
+
+The workspace switcher in the ZPan sidebar lists all workspaces you belong to — your personal workspace and any teams. Clicking a workspace sets it as the **active space** for the current session. All subsequent file operations, uploads, and shares are scoped to the active space.
+
+The active space context is also applied to API key operations: when an API key is scoped to a specific workspace, it can only operate within that workspace regardless of what the caller requests.
+
+## Files Survive Member Departure
+
+Because files belong to the **team** rather than to the individual uploader, removing a member from a team does not affect any files they uploaded. Their files remain in the team workspace, attributed to their actor identity in audit logs, but fully owned by the team quota going forward.
+
+This design prevents the common problem in other platforms where deleting a user's account or removing them from a group takes their files with them.
+
+## API Scopes for Teams
+
+Team operations require the following authorization scopes:
+
+| Scope | Operations |
+|---|---|
+| `teams:read` | List teams, get team details, list activity |
+| `teams:create` | Create teams, create invite links, join teams |
+| `teams:update` | Update team settings, set/delete team logo |
+| `team_invitations:read` | List pending invitations |
+| `team_invitations:create` | Create invite links |
+| `team_members:create` | Join a team (accept an invite link) |
+| `team_entitlements:read` | List quota entitlements (admin) |
+| `team_entitlements:create` | Grant quota entitlements (admin) |
+| `team_entitlements:update` | Modify quota entitlements (admin) |
+| `team_entitlements:delete` | Revoke quota entitlements (admin) |
+
+## Team Activity Log
+
+Every file operation, member change, and share event in a team workspace is recorded in the activity log. Owners can review the log in **Team Settings → Activity** or via the API:
+
+```typescript
+GET /api/teams/{teamId}/activity?page=1&pageSize=50
+```
+
+Each event includes the actor type, actor reference, action taken, target object, and a timestamp. Actor types include `user`, `api_key`, `oauth`, `device`, `agent`, and `system`.

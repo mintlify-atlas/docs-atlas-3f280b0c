@@ -1,0 +1,446 @@
+---
+title: "Objects API: Files and Folders in ZPan"
+sidebarTitle: "Objects"
+description: "REST API for managing files and folders in ZPan. Covers creating, listing, updating, trashing, and the three-step presigned upload protocol."
+---
+
+The Objects API is the core of ZPan's file system. Files and folders are both represented as **Matter** resources, distinguished by whether a `size` field is present. Creating a file returns upload instructions — presigned PUT URLs that the client uses to stream bytes directly to S3-compatible storage without routing them through the ZPan server. Folders are created instantly with no upload step.
+
+<Note>
+  All Objects endpoints require an active workspace (organization). Requests without an active org context return `400 Bad Request`. Minimum required scopes are listed per endpoint below.
+</Note>
+
+## The Matter Schema
+
+<ResponseField name="id" type="string" required>
+  Opaque Base62 identifier for this object.
+</ResponseField>
+
+<ResponseField name="orgId" type="string" required>
+  ID of the workspace (organization) that owns this object.
+</ResponseField>
+
+<ResponseField name="alias" type="string" required>
+  Immutable short token used in share and redirect URLs.
+</ResponseField>
+
+<ResponseField name="name" type="string" required>
+  Display name of the file or folder.
+</ResponseField>
+
+<ResponseField name="type" type="string" required>
+  MIME type for files, or an empty string for folders.
+</ResponseField>
+
+<ResponseField name="size" type="integer | null" required>
+  File size in bytes. `null` for folders and for file drafts that have not been completed yet.
+</ResponseField>
+
+<ResponseField name="dirtype" type="integer | null" required>
+  Numeric directory type flag. `0` for ordinary folders; `null` for files.
+</ResponseField>
+
+<ResponseField name="parent" type="string" required>
+  Slash-delimited parent folder path relative to the workspace root. Empty string for objects in the root.
+</ResponseField>
+
+<ResponseField name="object" type="string" required>
+  Storage key (S3 object key) of the underlying blob.
+</ResponseField>
+
+<ResponseField name="storageId" type="string" required>
+  ID of the storage backend where the blob is held.
+</ResponseField>
+
+<ResponseField name="status" type="string" required>
+  Lifecycle status. `active` for live objects; `draft` for files that have been created but whose upload has not yet been completed.
+</ResponseField>
+
+<ResponseField name="trashedAt" type="integer | null" required>
+  Unix timestamp (milliseconds) when the object was moved to the trash, or `null` for live objects.
+</ResponseField>
+
+<ResponseField name="createdBy" type="object | null" required>
+  Identity of the actor who created the object. Contains `type` and `ref` fields.
+</ResponseField>
+
+<ResponseField name="createdAt" type="string" required>
+  ISO 8601 creation timestamp.
+</ResponseField>
+
+<ResponseField name="updatedAt" type="string" required>
+  ISO 8601 last-updated timestamp.
+</ResponseField>
+
+---
+
+## List Objects
+
+```
+GET /api/objects
+```
+
+Returns a cursor-paged list of files and folders in a given directory. Scope: `objects:read`.
+
+<ParamField query="parent" type="string">
+  Slash-delimited folder path to list. Omit or pass an empty string to list the root.
+</ParamField>
+
+<ParamField query="pageToken" type="string">
+  Opaque cursor token from the previous response's `nextPageToken`.
+</ParamField>
+
+<ParamField query="pageSize" type="integer">
+  Number of items per page (default 50, maximum 500 for the file manager view).
+</ParamField>
+
+<ParamField query="search" type="string">
+  Optional search term to filter results by name.
+</ParamField>
+
+<ParamField query="type" type="string">
+  Optional MIME type filter.
+</ParamField>
+
+<CodeGroup>
+
+```bash curl
+curl -H 'Authorization: Bearer zpk_...' \
+  'https://your-zpan.example/api/objects?parent=documents'
+```
+
+</CodeGroup>
+
+**Response `200`**
+
+```json
+{
+  "items": [
+    {
+      "id": "01HQ...",
+      "name": "report.pdf",
+      "type": "application/pdf",
+      "size": 204800,
+      "parent": "documents",
+      "status": "active",
+      "hasChildren": false,
+      "createdAt": "2024-03-01T10:00:00Z",
+      "updatedAt": "2024-03-01T10:00:00Z"
+    }
+  ],
+  "nextPageToken": "eyJh..."
+}
+```
+
+---
+
+## Create Object (Folder or File Draft)
+
+```
+POST /api/objects
+```
+
+Creates a folder (omit `size`) or a file draft (include `size`). For files, the response includes `upload` instructions with presigned PUT URLs. Scope: `objects:create`.
+
+<ParamField body="name" type="string" required>
+  Name of the file or folder. Must be at least 1 character.
+</ParamField>
+
+<ParamField body="type" type="string">
+  MIME type. Required for files; omit for folders.
+</ParamField>
+
+<ParamField body="size" type="integer">
+  File size in bytes. Omit when creating a folder. Presence of this field signals a file upload intent.
+</ParamField>
+
+<ParamField body="parent" type="string">
+  Slash-delimited target folder path. Defaults to the root (`""`).
+</ParamField>
+
+<ParamField body="dirtype" type="integer">
+  Directory type flag. Pass `0` for ordinary folders. Defaults to `0`.
+</ParamField>
+
+<ParamField body="onConflict" type="string">
+  Conflict strategy if an object with the same name already exists in `parent`. One of `fail` (default), `rename`, or `replace`.
+</ParamField>
+
+<CodeGroup>
+
+```bash Create folder
+curl -X POST https://your-zpan.example/api/objects \
+  -H 'Authorization: Bearer zpk_...' \
+  -H 'Content-Type: application/json' \
+  -d '{"name": "reports", "parent": ""}'
+```
+
+```bash Create file draft
+curl -X POST https://your-zpan.example/api/objects \
+  -H 'Authorization: Bearer zpk_...' \
+  -H 'Content-Type: application/json' \
+  -d '{"name": "notes.txt", "type": "text/plain", "size": 1024, "parent": "documents"}'
+```
+
+</CodeGroup>
+
+**Response `201`** — folder (no `upload` field):
+
+```json
+{
+  "id": "01HQ...",
+  "name": "reports",
+  "type": "",
+  "size": null,
+  "parent": "",
+  "status": "active"
+}
+```
+
+**Response `201`** — file draft (includes `upload`):
+
+```json
+{
+  "id": "01HQ...",
+  "name": "notes.txt",
+  "type": "text/plain",
+  "size": null,
+  "parent": "documents",
+  "status": "draft",
+  "upload": {
+    "sessionId": "01HQ...",
+    "uploadId": null,
+    "mode": "single",
+    "partSize": 1024,
+    "partCount": 1,
+    "expiresAt": "2024-03-01T11:00:00Z",
+    "presignedExpiresAt": "2024-03-01T10:15:00Z",
+    "requiredHeaders": {},
+    "parts": [
+      {
+        "partNumber": 1,
+        "url": "https://s3.example.com/...",
+        "expiresAt": "2024-03-01T10:15:00Z",
+        "headers": {},
+        "offset": 0,
+        "length": 1024
+      }
+    ],
+    "workflow": { "version": "1", "..." : "..." }
+  }
+}
+```
+
+### The Upload Protocol
+
+File bytes go directly to S3-compatible storage and never traverse ZPan. After creating a file draft, follow these steps:
+
+**Step 1 — PUT each part to its presigned URL.**
+The `upload.parts` array describes exactly which byte range (`offset`, `length`) to send to which `url`. Apply the `headers` object from each part as additional request headers. Capture the `ETag` response header from each PUT response.
+
+**Step 2 — If presigned URLs expire before upload completes**, call `POST /api/objects/{id}/uploads/{sessionId}/parts` with the missing `partNumbers` to receive fresh URLs. Re-signing does not change the upload session, storage key, or multipart upload identity.
+
+**Step 3 — Complete the upload.**
+Call `POST /api/objects/{id}/uploads/{sessionId}/completions` with one `{partNumber, etag}` record per part. The file becomes `active` once the server confirms all parts.
+
+<Warning>
+  You must supply exactly `upload.partCount` records when completing the upload. Missing, duplicate, or out-of-range part numbers are rejected.
+</Warning>
+
+---
+
+## Get Object
+
+```
+GET /api/objects/{id}
+```
+
+Returns a single object. When egress is metered, the response includes a short-lived `downloadUrl`. Scope: `objects:read`.
+
+<ParamField path="id" type="string" required>
+  Opaque ID of the object.
+</ParamField>
+
+---
+
+## Update Object
+
+```
+PATCH /api/objects/{id}
+```
+
+Renames or moves a live object. Scope: `objects:update`.
+
+<ParamField path="id" type="string" required>
+  Opaque ID of the object.
+</ParamField>
+
+<ParamField body="name" type="string">
+  New display name.
+</ParamField>
+
+<ParamField body="parent" type="string">
+  New parent folder path. Moving the object to a different folder.
+</ParamField>
+
+<ParamField body="onConflict" type="string">
+  Conflict strategy: `fail`, `rename`, or `replace`.
+</ParamField>
+
+---
+
+## Delete Object
+
+```
+DELETE /api/objects/{id}
+```
+
+Moves a live object to the trash (soft delete). Scope: `objects:delete`. The object appears in `GET /api/trash/objects` and can be restored. Permanent deletion is a separate operation on the trash resource.
+
+<ParamField path="id" type="string" required>
+  Opaque ID of the object to trash.
+</ParamField>
+
+**Response `204 No Content`** on success.
+
+---
+
+## Copy Object
+
+```
+POST /api/objects/{id}/copies
+```
+
+Creates a copy of an object at the specified destination. Scope: `objects:update`.
+
+<ParamField path="id" type="string" required>
+  Opaque ID of the source object.
+</ParamField>
+
+<ParamField body="parent" type="string">
+  Destination folder path. Defaults to the root.
+</ParamField>
+
+<ParamField body="onConflict" type="string">
+  Conflict strategy: `fail`, `rename`, or `replace`.
+</ParamField>
+
+---
+
+## Transfer Object
+
+```
+POST /api/objects/{id}/transfers
+```
+
+Copies or moves an object to a different workspace. Scope: `objects:update`.
+
+<ParamField path="id" type="string" required>
+  Opaque ID of the source object.
+</ParamField>
+
+<ParamField body="targetOrgId" type="string" required>
+  Destination workspace (organization) ID.
+</ParamField>
+
+<ParamField body="targetParent" type="string">
+  Destination folder path in the target workspace. Defaults to root.
+</ParamField>
+
+<ParamField body="mode" type="string" required>
+  `"copy"` or `"move"`.
+</ParamField>
+
+---
+
+## Re-Sign Upload Part URLs
+
+```
+POST /api/objects/{id}/uploads/{uploadSessionId}/parts
+```
+
+Returns fresh presigned PUT descriptors for the specified part numbers. Call this when presigned URLs expire before the upload finishes. Scope: `objects:create`.
+
+<ParamField path="id" type="string" required>
+  Opaque ID of the file draft.
+</ParamField>
+
+<ParamField path="uploadSessionId" type="string" required>
+  Upload session ID from the `upload.sessionId` field returned by `createObject`.
+</ParamField>
+
+<ParamField body="partNumbers" type="integer[]" required>
+  Array of part numbers (1-indexed, maximum 100 per call) for which to issue fresh URLs.
+</ParamField>
+
+<CodeGroup>
+
+```bash curl
+curl -X POST \
+  https://your-zpan.example/api/objects/01HQ.../uploads/01HQ.../parts \
+  -H 'Authorization: Bearer zpk_...' \
+  -H 'Content-Type: application/json' \
+  -d '{"partNumbers": [2, 3]}'
+```
+
+</CodeGroup>
+
+---
+
+## Complete Upload
+
+```
+POST /api/objects/{id}/uploads/{uploadSessionId}/completions
+```
+
+Finalizes the upload after all parts have been PUT to storage. The file draft becomes a live `active` object. Scope: `objects:create`.
+
+<ParamField path="id" type="string" required>
+  Opaque ID of the file draft.
+</ParamField>
+
+<ParamField path="uploadSessionId" type="string" required>
+  Upload session ID.
+</ParamField>
+
+<ParamField body="parts" type="array" required>
+  Array of `{ partNumber, etag }` records — one per part, in any order. Must contain exactly `partCount` entries. The `etag` value is the normalized ETag returned by the S3 PUT response header.
+</ParamField>
+
+<CodeGroup>
+
+```bash curl
+curl -X POST \
+  https://your-zpan.example/api/objects/01HQ.../uploads/01HQ.../completions \
+  -H 'Authorization: Bearer zpk_...' \
+  -H 'Content-Type: application/json' \
+  -d '{"parts": [{"partNumber": 1, "etag": "\"d41d8cd98f00b204e9800998ecf8427e\""}]}'
+```
+
+</CodeGroup>
+
+**Response `200`** — the finalized `Matter` object with `status: "active"`.
+
+---
+
+## Abort Upload
+
+```
+DELETE /api/objects/{id}/uploads/{uploadSessionId}
+```
+
+Aborts an active upload session and discards the file draft. This operation is idempotent for already-aborted sessions. Scope: `objects:create`.
+
+<ParamField path="id" type="string" required>
+  Opaque ID of the file draft.
+</ParamField>
+
+<ParamField path="uploadSessionId" type="string" required>
+  Upload session ID.
+</ParamField>
+
+<ParamField query="strictStorageCleanup" type="string">
+  Pass `1` or `true` to require that storage cleanup succeeds before returning. Without this flag, single-PUT aborts delete the storage object on a best-effort basis.
+</ParamField>
+
+**Response `204 No Content`** on success.

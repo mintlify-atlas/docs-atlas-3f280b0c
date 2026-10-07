@@ -1,0 +1,343 @@
+---
+title: "Teams API: Manage Workspaces and Members"
+sidebarTitle: "Teams"
+description: "REST API for creating and managing team workspaces in ZPan. Covers team creation, member invitations, role management, and workspace switching."
+---
+
+The Teams API manages collaborative workspaces. A team has a shared storage quota, a member list with `owner` or `editor`/`viewer` roles, and an optional logo. Members join via invite links or email invitations. Administrators can also list all teams and manage quota entitlements from the admin panel.
+
+<Note>
+  Team management endpoints require the `teams:read`, `teams:create`, or `teams:update` scope. Admin-only endpoints (list all teams, manage entitlements) additionally require the site `admin` role.
+</Note>
+
+## Team Summary Schema
+
+<ResponseField name="id" type="string" required>
+  Opaque identifier for the team (organization ID).
+</ResponseField>
+
+<ResponseField name="name" type="string" required>
+  Display name of the team.
+</ResponseField>
+
+<ResponseField name="slug" type="string" required>
+  URL-safe slug derived from the team name.
+</ResponseField>
+
+<ResponseField name="logo" type="string | null" required>
+  URL of the team logo image, or `null` if no logo is set.
+</ResponseField>
+
+<ResponseField name="memberCount" type="integer" required>
+  Number of members currently in the team.
+</ResponseField>
+
+<ResponseField name="ownerName" type="string | null" required>
+  Display name of the team owner, or `null`.
+</ResponseField>
+
+<ResponseField name="quotaUsed" type="integer" required>
+  Bytes currently used by the team's stored files.
+</ResponseField>
+
+<ResponseField name="quotaTotal" type="integer" required>
+  Total storage quota allocated to the team in bytes.
+</ResponseField>
+
+<ResponseField name="createdAt" type="integer" required>
+  Unix timestamp (milliseconds) when the team was created.
+</ResponseField>
+
+---
+
+## List Teams (Admin)
+
+```
+GET /api/admin/teams
+```
+
+Returns all teams on the site. Requires the site `admin` role. Scope: `teams:read`.
+
+<CodeGroup>
+
+```bash curl
+curl -H 'Authorization: Bearer zpk_...' \
+  https://your-zpan.example/api/admin/teams
+```
+
+</CodeGroup>
+
+**Response `200`**
+
+```json
+{
+  "items": [
+    {
+      "id": "01HQ...",
+      "name": "Engineering",
+      "slug": "engineering",
+      "logo": null,
+      "memberCount": 5,
+      "ownerName": "Alice",
+      "quotaUsed": 5368709120,
+      "quotaTotal": 107374182400,
+      "createdAt": 1709208000000
+    }
+  ],
+  "total": 1,
+  "page": 1,
+  "pageSize": 1
+}
+```
+
+---
+
+## Get Team (Admin)
+
+```
+GET /api/admin/teams/{teamId}
+```
+
+Returns a single team by ID. Requires the site `admin` role. Scope: `teams:read`.
+
+<ParamField path="teamId" type="string" required>
+  Opaque team ID.
+</ParamField>
+
+---
+
+## Get Team Invite Link Info
+
+```
+GET /api/teams/invite-links/{token}
+```
+
+Returns public information about an invite link — team name, role, and expiry — before the user joins. This endpoint is **public**; no authentication required.
+
+<ParamField path="token" type="string" required>
+  The invite link token.
+</ParamField>
+
+**Response `200`**
+
+```json
+{
+  "organizationId": "01HQ...",
+  "organizationName": "Engineering",
+  "role": "editor",
+  "expiresAt": "2024-04-01T00:00:00Z"
+}
+```
+
+---
+
+## Create Invite Link
+
+```
+POST /api/teams/{teamId}/invite-links
+```
+
+Creates a shareable invite link for the team. Anyone with the link can join with the specified role. Scope: `team-invitations:create`.
+
+<ParamField path="teamId" type="string" required>
+  Opaque team ID.
+</ParamField>
+
+<ParamField body="role" type="string">
+  Role to assign when someone joins: `"editor"` or `"viewer"`. Defaults to `"viewer"`.
+</ParamField>
+
+<ParamField body="expiresIn" type="integer">
+  Optional TTL in seconds. Omit for a link that never expires.
+</ParamField>
+
+<CodeGroup>
+
+```bash curl
+curl -X POST https://your-zpan.example/api/teams/01HQ.../invite-links \
+  -H 'Authorization: Bearer zpk_...' \
+  -H 'Content-Type: application/json' \
+  -d '{"role": "editor", "expiresIn": 604800}'
+```
+
+</CodeGroup>
+
+**Response `201`**
+
+```json
+{
+  "token": "abc123xyz",
+  "expiresAt": "2024-03-08T10:00:00Z"
+}
+```
+
+---
+
+## Join Team via Invite Link
+
+```
+POST /api/teams/{teamId}/members
+```
+
+Joins a team using an invite link token. The authenticated user is added as a member with the role encoded in the invite link. Scope: `team-members:create`.
+
+<ParamField path="teamId" type="string" required>
+  Opaque team ID.
+</ParamField>
+
+<ParamField body="token" type="string" required>
+  The invite link token.
+</ParamField>
+
+**Response `200`** — `{ "ok": true }` on success.
+
+| Error | Cause |
+|---|---|
+| `404 Not Found` | Invalid or non-existent invite token. |
+| `409 Conflict` | User is already a member of this team. |
+| `410 Gone` | Invite link has expired. |
+
+---
+
+## List Pending Invitations
+
+```
+GET /api/teams/{teamId}/invitations
+```
+
+Lists pending (unaccepted) email invitations for the team. Scope: `team-invitations:read`.
+
+<ParamField path="teamId" type="string" required>
+  Opaque team ID.
+</ParamField>
+
+**Response `200`**
+
+```json
+{
+  "items": [
+    {
+      "id": "01HQ...",
+      "email": "bob@example.com",
+      "role": "editor",
+      "expiresAt": "2024-04-01T00:00:00Z",
+      "createdAt": "2024-03-01T10:00:00Z"
+    }
+  ],
+  "total": 1,
+  "page": 1,
+  "pageSize": 1
+}
+```
+
+---
+
+## List Team Activity
+
+```
+GET /api/teams/{teamId}/activity
+```
+
+Returns a paginated audit log of actions performed within the team workspace. Scope: `teams:read`.
+
+<ParamField path="teamId" type="string" required>
+  Opaque team ID.
+</ParamField>
+
+<ParamField query="page" type="integer">
+  Page number (1-indexed). Defaults to 1.
+</ParamField>
+
+<ParamField query="pageSize" type="integer">
+  Items per page (default 20).
+</ParamField>
+
+**Response `200`** — paginated list of audit events. Each event includes `id`, `action`, `targetType`, `targetName`, `actorType`, `actorRef`, `createdAt`, and resolved `user` and `actor` display fields.
+
+---
+
+## Set Team Logo
+
+```
+PUT /api/teams/{teamId}/logo
+```
+
+Uploads a team logo image. Send as `multipart/form-data` with a `file` field. Scope: `teams:update`.
+
+<ParamField path="teamId" type="string" required>
+  Opaque team ID.
+</ParamField>
+
+<CodeGroup>
+
+```bash curl
+curl -X PUT https://your-zpan.example/api/teams/01HQ.../logo \
+  -H 'Authorization: Bearer zpk_...' \
+  -F 'file=@logo.png'
+```
+
+</CodeGroup>
+
+**Response `200`** — `{ "url": "https://..." }` with the public URL of the uploaded logo.
+
+---
+
+## Delete Team Logo
+
+```
+DELETE /api/teams/{teamId}/logo
+```
+
+Removes the team logo. Scope: `teams:update`.
+
+<ParamField path="teamId" type="string" required>
+  Opaque team ID.
+</ParamField>
+
+**Response `204 No Content`** on success.
+
+---
+
+## Team Entitlements (Admin)
+
+Administrators can grant, update, and revoke storage quota entitlements for teams. These endpoints require the site `admin` role.
+
+### List Entitlements
+
+```
+GET /api/admin/teams/{teamId}/entitlements
+```
+
+<ParamField path="teamId" type="string" required>Opaque team ID.</ParamField>
+
+### Grant Entitlement
+
+```
+POST /api/admin/teams/{teamId}/entitlements
+```
+
+<ParamField path="teamId" type="string" required>Opaque team ID.</ParamField>
+
+<ParamField body="resourceType" type="string" required>Must be `"storage"`.</ParamField>
+
+<ParamField body="bytes" type="integer" required>Additional storage bytes to grant.</ParamField>
+
+<ParamField body="expiresAt" type="string">Optional ISO 8601 expiry for this entitlement.</ParamField>
+
+<ParamField body="note" type="string">Optional admin note (max 500 characters).</ParamField>
+
+### Update Entitlement
+
+```
+PATCH /api/admin/teams/{teamId}/entitlements/{eid}
+```
+
+<ParamField path="eid" type="string" required>Opaque entitlement ID.</ParamField>
+
+### Revoke Entitlement
+
+```
+DELETE /api/admin/teams/{teamId}/entitlements/{eid}
+```
+
+**Response `204 No Content`** on success.

@@ -1,0 +1,171 @@
+---
+title: "Image Hosting Custom Domains with Cloudflare for SaaS"
+sidebarTitle: "Image Domains"
+description: "Configure custom domains for image hosting in ZPan using Cloudflare for SaaS or a self-managed reverse proxy. Requires ZPan Pro or Business license."
+---
+
+Image custom domains let workspace owners serve their uploaded images from their own hostnames — for example, `img.acme.com` instead of a shared ZPan domain. ZPan routes incoming requests for those domains to the correct workspace's image-hosting endpoint. The feature is available with a ZPan Pro or Business license and is configured instance-wide by the site administrator before workspace owners can bind their own domains.
+
+<Warning>
+Image custom domains require a **ZPan Pro or Business license**. The admin can configure and test the provider on any license tier, but workspace owners cannot bind new domains until the provider reports **Ready** and a qualifying license is active.
+</Warning>
+
+## Provider Types
+
+ZPan supports two provider types for image custom domains.
+
+| Provider | Best for |
+|---|---|
+| Cloudflare for SaaS | ZPan deployed on Cloudflare Workers or behind Cloudflare-proxied infrastructure |
+| Self-managed | ZPan deployed on Docker, Node.js, Lambda, or any infrastructure where you control DNS and TLS |
+
+The administrator selects and tests one instance-wide provider in **Admin → Settings → Image custom domains**. All workspace bindings for the instance use the same provider.
+
+<Note>
+The Cloudflare API token entered in **Admin → Settings → Image custom domains** is a **runtime provider token** — it is separate from the `CLOUDFLARE_API_TOKEN` used by GitHub Actions or Wrangler to deploy ZPan. The deployment token manages Worker, D1, and R2 resources. The runtime provider token manages a specific zone's DNS records, fallback origin, and Custom Hostnames. They require different permissions and should not be the same token.
+</Note>
+
+---
+
+## Cloudflare for SaaS
+
+Cloudflare for SaaS lets Cloudflare handle TLS certificate provisioning and DNS validation for workspace-owned custom hostnames. ZPan uses it through Cloudflare's Custom Hostnames API. Two modes are available depending on how ZPan is deployed.
+
+### Before You Begin
+
+Before configuring in ZPan, complete the following in Cloudflare:
+
+<Steps>
+  <Step title="Add or identify a Cloudflare zone for SaaS">
+    This zone will own the SaaS configuration and issue certificates. A dedicated zone is recommended (e.g. `saas-hosting.example.com`) rather than reusing your primary application zone.
+  </Step>
+  <Step title="Enable Custom Hostnames for that zone">
+    In the Cloudflare dashboard, open the zone, go to **SSL/TLS → Custom Hostnames**, and enable Cloudflare for SaaS if it has not been enabled before.
+  </Step>
+  <Step title="Open the token creation link in ZPan">
+    In ZPan, navigate to **Admin → Settings → Image custom domains** and open the preconfigured API token creation link in the settings drawer. This link pre-fills the required permissions.
+  </Step>
+  <Step title="Create a zone-scoped API token">
+    In the Cloudflare dashboard, restrict the token to the zone that will own the SaaS configuration and create it. Copy the token value — it is shown only once.
+  </Step>
+</Steps>
+
+### Worker Mode
+
+Choose **Worker mode** when ZPan is deployed as a Cloudflare Worker. In this mode, Cloudflare routes workspace custom hostname traffic through a Worker URL rewrite rule to ZPan's image-hosting handler.
+
+**Required token permissions:**
+- Zone Read
+- DNS Edit
+- SSL and Certificates Edit
+- Zone Transform Rules Edit
+- Workers Routes Edit
+
+**Configuration fields:**
+
+| Field | Value |
+|---|---|
+| Provider token | The zone-scoped API token created above |
+| Zone ID | The ID of the zone that owns the SaaS configuration (found in the Cloudflare zone overview) |
+| Worker name | The name of the deployed ZPan Worker (e.g. `zpan`) |
+| CNAME target | A hostname inside the SaaS zone that workspace owners point their DNS records to (e.g. `images.saas-hosting.example.com`) |
+
+**What ZPan does with this configuration:**
+
+ZPan creates or reuses a proxied CNAME target and fallback origin inside your zone. It installs one managed URL rewrite rule that routes only requests matching `*/ih/*` to the configured Worker. This means workspace image URLs remain clean (no `/ih/` path in the customer-visible URL), and unrelated traffic to the SaaS zone does not invoke the Worker.
+
+When a workspace owner binds a domain, ZPan creates its Cloudflare Custom Hostname entry, monitors DNS and TLS status, and removes it when the binding is deleted.
+
+### External Origin Mode
+
+Choose **External origin mode** when ZPan is deployed outside Cloudflare Workers — for example on Docker, Node.js, or AWS Lambda. Cloudflare proxies workspace custom hostname traffic to a ZPan-accessible origin you control.
+
+**Required token permissions:**
+- Zone Read
+- DNS Edit
+- SSL and Certificates Edit
+
+<Note>
+External origin mode does not require Workers Routes Edit or Transform Rules Edit permissions. There is no Worker route or URL rewrite rule involved.
+</Note>
+
+**Setup steps:**
+
+<Steps>
+  <Step title="Make ZPan reachable through HTTPS at an origin hostname">
+    The ZPan service must be accessible via HTTPS at a hostname inside the SaaS zone, for example `origin.saas-hosting.example.com`. Configure your reverse proxy or application server to serve ZPan at that address.
+  </Step>
+  <Step title="Create a proxied DNS record for the origin hostname">
+    In Cloudflare DNS for your SaaS zone, create a proxied `A`, `AAAA`, or `CNAME` record pointing to the ZPan server at the origin hostname. The record must be **proxied** (orange cloud), not DNS-only.
+  </Step>
+  <Step title="Configure your reverse proxy or application to accept custom Host headers">
+    Requests arriving at the origin will carry the workspace's custom hostname as the `Host` header. Your reverse proxy or application must accept requests with arbitrary `Host` values and forward them to ZPan.
+  </Step>
+  <Step title="Enter the provider details in ZPan">
+    In **Admin → Settings → Image custom domains**, enter:
+    - Provider token
+    - Zone ID
+    - Select **External origin**
+    - Origin hostname (e.g. `origin.saas-hosting.example.com`)
+    - CNAME target (a hostname inside the same zone for workspace owners to point to)
+  </Step>
+  <Step title="Save and test">
+    Click **Set up and test**. ZPan validates the proxied origin record, configures it as the Cloudflare for SaaS fallback origin, and creates or validates the proxied CNAME target. The provider status changes to **Ready** when all checks pass.
+  </Step>
+</Steps>
+
+**What ZPan does with this configuration:**
+
+ZPan assigns the origin through `custom_origin_server` when provisioning each Custom Hostname. It does not create a Worker route or URL rewrite rule. Certificate provisioning and validation are handled by Cloudflare for SaaS as in Worker mode.
+
+### Workspace Owner Steps (Both Modes)
+
+After the provider is **Ready**, workspace owners can bind their custom domains:
+
+1. In workspace settings, enter the custom hostname to bind (e.g. `img.acme.com`).
+2. ZPan provides a CNAME record to create at the authoritative DNS provider for that domain (pointing to the CNAME target configured by the admin).
+3. After the workspace owner creates the DNS record, Cloudflare validates it and issues a TLS certificate. This can take some time after DNS propagates.
+
+---
+
+## Self-Managed
+
+Use the self-managed provider when DNS and TLS terminate directly at the ZPan instance or at infrastructure controlled by the site administrator — for example, a Caddy or Nginx reverse proxy in front of a Docker deployment.
+
+<Steps>
+  <Step title="Configure your reverse proxy for wildcard or custom hostname routing">
+    Set up your reverse proxy so that requests for any workspace's custom image domain are forwarded to the same ZPan instance. Wildcard certificates (e.g. `*.img-hosting.example.com`) or individual certificate provisioning via Let's Encrypt with DNS-01 challenge are both common approaches.
+  </Step>
+  <Step title="Enter DNS instructions in ZPan">
+    In **Admin → Settings → Image custom domains**, enter one or more `CNAME`, `A`, or `AAAA` records that workspace owners must create at their authoritative DNS provider. These records should point to your ZPan server or reverse proxy.
+  </Step>
+  <Step title="Save and test the provider configuration">
+    Save the provider settings and click **Test**. ZPan verifies that the provider configuration is internally consistent before workspace owners can start binding domains.
+  </Step>
+</Steps>
+
+**Domain verification flow:**
+
+Each workspace binding receives a unique HTTP challenge path. After a workspace owner creates the DNS record and propagation takes effect, ZPan sends an HTTP request to that challenge path through the custom domain. Successfully reaching ZPan's verification response on that path proves the request is reaching the correct instance, and ZPan activates image routing for that domain.
+
+---
+
+## Changing or Disabling the Provider
+
+Changing the provider or disabling image custom domains affects all existing workspace bindings:
+
+- **Changing providers** invalidates every existing binding. Re-enabling or switching to a new provider requires another successful provider test, which reprovisions all existing domains under the new provider.
+- **Disabling the provider** invalidates all bindings. Workspace owners see their custom domains deactivated until the provider is re-enabled and re-tested.
+
+## License Downgrade Behavior
+
+If the instance license is downgraded below Pro:
+
+- Existing image URLs continue to resolve — there is no immediate disruption to served images.
+- Administrators cannot change or re-test the provider.
+- Workspace owners cannot add new custom domain bindings or replace existing ones.
+- Existing bindings can still be **removed**.
+
+<Tip>
+If you expect a license change, communicate the timeline to workspace owners ahead of the change so they can plan accordingly.
+</Tip>

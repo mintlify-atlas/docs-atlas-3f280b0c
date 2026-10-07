@@ -1,0 +1,162 @@
+---
+title: "Deploy ZPan on AWS Lambda with Function URLs"
+sidebarTitle: "AWS Lambda"
+description: "Deploy ZPan to AWS Lambda via SAM and GitHub Actions. Lambda Function URL provides HTTPS without API Gateway. Uses Turso for the database."
+---
+
+ZPan runs on AWS Lambda via a [Lambda Function URL](https://docs.aws.amazon.com/lambda/latest/dg/lambda-urls.html), which provides a dedicated HTTPS endpoint with no API Gateway needed. A [SAM](https://aws.amazon.com/serverless/sam/) template provisions the function and wires its configuration. The GitHub Actions workflow deploys automatically on every push to `main` after initial setup, and re-running is fully idempotent — it redeploys without recreating existing resources.
+
+## Prerequisites
+
+Before deploying, make sure you have the following:
+
+- An AWS account with permissions to create Lambda functions, IAM roles, and S3 buckets
+- A [Turso](https://turso.tech) database (free tier: 9 GB storage, no credit card required)
+- A fork of the `saltbo/zpan` repository
+
+### Create a Turso database
+
+```bash
+curl -sSfL https://get.tur.so/install.sh | bash
+turso auth signup           # GitHub OAuth — no credit card
+turso db create zpan
+turso db show zpan --url    # → TURSO_DATABASE_URL
+turso db tokens create zpan # → TURSO_AUTH_TOKEN
+```
+
+Alternatively, create the database via the [Turso dashboard](https://app.turso.tech) without installing the CLI.
+
+## GitHub Secrets
+
+Add the following secrets in your fork under **Settings → Secrets and variables → Actions**:
+
+| Secret | Description |
+|--------|-------------|
+| `TURSO_DATABASE_URL` | Turso database URL, e.g. `libsql://your-db.turso.io` |
+| `TURSO_AUTH_TOKEN` | Turso auth token — rotate with `turso db tokens create zpan` |
+| `AWS_ACCESS_KEY_ID` | AWS access key ID for the deploy user |
+| `AWS_SECRET_ACCESS_KEY` | AWS secret access key for the deploy user |
+| `AWS_REGION` | AWS region to deploy to, e.g. `us-east-1` |
+
+<Note>
+**S3 credentials are not stored as GitHub Secrets.** ZPan stores your object storage configuration in the database, configured via the Admin UI after the first deploy. This keeps bucket secrets off GitHub and lets you manage multiple storage backends from one place.
+</Note>
+
+<Note>
+**`BETTER_AUTH_SECRET` is optional.** If omitted, the workflow auto-generates a secure random value on first deploy and stores it in the Lambda function configuration. Add this secret only if you want to supply your own value.
+</Note>
+
+## IAM Permissions
+
+The AWS credentials used by the workflow need the following permissions. For production, scope the `Resource` fields to specific ARNs rather than using wildcards:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["lambda:*", "iam:*", "s3:*", "cloudformation:*"],
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": "sts:GetCallerIdentity",
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+The workflow creates a single S3 bucket named `zpan-sam-artifacts-<account>-<region>` for SAM deployment artifacts on the first run.
+
+## Deployment Steps
+
+<Steps>
+  <Step title="Fork the repository">
+    Go to [github.com/saltbo/zpan](https://github.com/saltbo/zpan) and click **Fork**. The workflow includes a guard that prevents it from running in the upstream repository — it only executes in forks.
+  </Step>
+
+  <Step title="Add GitHub Secrets">
+    In your fork, navigate to **Settings → Secrets and variables → Actions** and add all five secrets from the table above.
+  </Step>
+
+  <Step title="Run the workflow">
+    Go to the **Actions** tab, select **Deploy to AWS Lambda** from the left sidebar, and click **Run workflow**. The first run provisions the Lambda function, SAM artifacts bucket, and all required IAM roles.
+  </Step>
+
+  <Step title="Open the Function URL">
+    When the workflow completes, the job summary displays the Lambda Function URL. Open it in your browser.
+  </Step>
+
+  <Step title="Register your first user">
+    Register an account on your ZPan instance. The first user to register is automatically granted admin privileges.
+  </Step>
+
+  <Step title="Configure storage">
+    Go to **Admin → Storages → Add storage** and fill in your S3-compatible bucket details:
+
+    | Field | Example value |
+    |-------|--------------|
+    | Endpoint | `https://s3.amazonaws.com` (AWS S3), or your R2/Tigris/B2 URL |
+    | Bucket | Your bucket name |
+    | Region | The bucket's region |
+    | Access Key | Bucket access key |
+    | Secret Key | Bucket secret key |
+
+    <Note>
+    The storage endpoint must be reachable from the **client browser**. ZPan uploads files directly to S3 via presigned URLs — no server bandwidth is used.
+    </Note>
+  </Step>
+</Steps>
+
+## Cost
+
+With the AWS free tier and Turso free tier, personal ZPan usage costs $0 per month:
+
+| Resource | Free tier | Notes |
+|----------|-----------|-------|
+| AWS Lambda | 1 M requests / 400,000 GB-seconds per month | Easily covers personal use |
+| Lambda Function URL | Included with Lambda | No extra charge |
+| S3 (SAM artifacts) | 5 GB per month | One-time ~10 MB upload per deploy |
+| Turso | 9 GB storage, 1 B row reads per month | Shared across all deployments |
+
+S3 (or R2/Tigris) for ZPan file storage is billed separately based on your usage. ZPan itself adds no server-side bandwidth costs because files transfer directly between the client and S3.
+
+## Entitlement Refresh
+
+ZPan refreshes its entitlement certificate every 6 hours and syncs metered traffic every 10 minutes. Lambda has no persistent background process, so you need to drive these calls from an external scheduler.
+
+### Setup
+
+<Steps>
+  <Step title="Generate a secret">
+    ```bash
+    openssl rand -hex 32
+    ```
+  </Step>
+
+  <Step title="Add the environment variable">
+    Add `REFRESH_CRON_SECRET` to the Lambda function configuration via the AWS Console (**Lambda → Configuration → Environment variables**) or through the SAM template:
+
+    | Variable | Value |
+    |----------|-------|
+    | `REFRESH_CRON_SECRET` | The random string from the previous step |
+  </Step>
+
+  <Step title="Create EventBridge Scheduler rules">
+    Use [Amazon EventBridge Scheduler](https://docs.aws.amazon.com/scheduler/latest/UserGuide/) to create two scheduled HTTP targets.
+
+    **License entitlement refresh** — runs every 6 hours:
+    - Schedule: `rate(6 hours)` or cron `0 */6 * * ? *`
+    - Target: `POST https://<your-lambda-url>/api/internal/licensing/refresh-runs`
+    - Header: `Authorization: Bearer <REFRESH_CRON_SECRET>`
+
+    **Traffic sync** — runs every 10 minutes:
+    - Schedule: `rate(10 minutes)` or cron `*/10 * * * ? *`
+    - Target: `POST https://<your-lambda-url>/api/internal/traffic-sync-runs`
+    - Header: `Authorization: Bearer <REFRESH_CRON_SECRET>`
+  </Step>
+</Steps>
+
+If `REFRESH_CRON_SECRET` is not set, both endpoints return `401` for all requests.

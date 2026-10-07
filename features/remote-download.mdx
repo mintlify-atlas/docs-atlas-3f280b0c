@@ -1,0 +1,134 @@
+---
+title: "Remote Download: Queue HTTP and Torrent Downloads"
+sidebarTitle: "Remote Download"
+description: "Queue HTTP, magnet link, and BitTorrent downloads that run on a downloader worker and land directly in your ZPan storage. Deploy the downloader separately for better network access."
+---
+
+Remote Download lets you queue URLs, magnet links, and torrent files for download by a worker process that runs independently of your browser. The downloader fetches the content and uploads it directly to your S3-compatible storage, where it appears in your ZPan file manager as a regular file. You don't need to keep a browser tab open while the download runs.
+
+## How It Works
+
+The remote download system has two components: the ZPan control plane (task management, state tracking, quota enforcement) and the downloader worker (the process that actually fetches content from the internet).
+
+<Steps>
+  <Step title="Queue the task">
+    Create a download task via `POST /api/download-tasks` or the web UI. Provide a URL, magnet link, or torrent file and a target folder in your workspace.
+  </Step>
+  <Step title="Downloader picks up the task">
+    The downloader worker polls ZPan for assigned tasks. When a task is assigned, the downloader begins fetching using its configured engine (aria2 or qBittorrent).
+  </Step>
+  <Step title="Content is uploaded to S3">
+    After download completes, the downloader uploads the file to S3 using ZPan's standard presigned upload protocol. It creates an object draft, PUTs the bytes directly to your bucket, and completes the upload session.
+  </Step>
+  <Step title="File appears in the file manager">
+    The file becomes an active `Matter` in the target folder and is immediately accessible from the ZPan web UI.
+  </Step>
+</Steps>
+
+## Supported Sources
+
+| Source type | Example |
+|---|---|
+| HTTP/HTTPS URL | `https://example.com/archive.zip` |
+| Magnet link | `magnet:?xt=urn:btih:...` |
+| `.torrent` file | Upload a `.torrent` file to the task creation form |
+
+## Downloader Engines
+
+The downloader worker supports two download engines:
+
+| Engine | Description | Best for |
+|---|---|---|
+| `aria2` | Default. Lightweight daemon supporting HTTP, HTTPS, and BitTorrent | Most use cases |
+| `qbittorrent` | Full-featured BitTorrent client with seeding support | Advanced torrent workflows |
+
+Set the engine with the `ZPAN_DOWNLOADER_ENGINE` environment variable.
+
+## Deployment Options
+
+### Bundled with ZPan
+
+The simplest setup runs the downloader in the same process or container as ZPan. No extra configuration is required beyond enabling remote download in Admin Settings.
+
+### Standalone Downloader
+
+For better network access — such as when your ZPan instance is on a restrictive network or when you want to download from a machine with faster connectivity — deploy the downloader worker separately.
+
+The standalone downloader needs network access to the internet (for fetching content) and to your ZPan instance (for task polling and the S3 upload protocol).
+
+**Docker setup:**
+
+```bash
+docker run -e ZPAN_SERVER_URL=https://your-zpan.example ghcr.io/saltbo/zpan-downloader:latest
+```
+
+On first start, the downloader prints a device authorization URL to the logs:
+
+```
+Open https://your-zpan.example/device?code=XXXX-YYYY to authorize this downloader
+```
+
+Visit that URL in a browser logged into ZPan as an admin to authorize the downloader. After authorization, the downloader registers itself with ZPan and begins polling for tasks.
+
+<Tip>
+  The device authorization flow is a one-time step. The downloader stores its credentials after authorization and reconnects automatically on restart.
+</Tip>
+
+## Environment Variables
+
+| Variable | Description | Default |
+|---|---|---|
+| `ZPAN_SERVER_URL` | URL of the ZPan control plane | Required |
+| `ZPAN_DOWNLOADER_ENGINE` | Download engine: `aria2` or `qbittorrent` | `aria2` |
+| `ZPAN_DOWNLOADER_BT_LISTEN_PORT` | TCP/UDP port for BitTorrent peer connections | Engine default |
+| `ZPAN_DOWNLOADER_SEED_CACHE_LIMIT` | Number of completed torrents to keep seeding before pruning | Engine default |
+
+## BitTorrent Configuration
+
+For BitTorrent downloads to work correctly, the port specified in `ZPAN_DOWNLOADER_BT_LISTEN_PORT` must be reachable from the internet (or your local network, for private torrents). Open the port in your firewall and NAT rules as needed.
+
+When `ZPAN_DOWNLOADER_SEED_CACHE_LIMIT` is set, the downloader keeps that many recently completed torrents in a seeding state before automatically removing the oldest from the seeding queue (the uploaded file in ZPan is not affected — seeding status only controls whether the downloader continues sharing the torrent).
+
+<Note>
+  Seeding behavior depends on the configured engine. aria2 provides basic seeding; qBittorrent provides the full seeding experience including ratio targets and seeding time limits.
+</Note>
+
+## Task States
+
+Download tasks move through the following states:
+
+| State | Description |
+|---|---|
+| `queued` | Task created, waiting for a downloader to pick it up |
+| `assigned` | A downloader worker has claimed the task |
+| `downloading` | Active download in progress |
+| `pausing` | Pause requested; waiting for the engine to pause |
+| `paused` | Download paused; can be resumed |
+| `suspended` | Downloader disconnected mid-download; task is recoverable |
+| `interrupted` | Download interrupted by an error; may be retried |
+| `uploading` | Download complete; bytes being uploaded to S3 |
+| `canceling` | Cancel requested; waiting for engine to stop |
+| `completed` | File successfully uploaded to S3 and active in the file manager |
+| `failed` | Download or upload failed; check the task timeline for details |
+| `canceled` | Task was canceled by the user |
+
+### Controlling Tasks
+
+You can pause, resume, cancel, and retry tasks from the web UI or the API:
+
+| Action | API call | Description |
+|---|---|---|
+| Pause | `PUT /api/download-tasks/{id}/status` `{ "status": "paused" }` | Pauses an in-progress download |
+| Resume | `PUT /api/download-tasks/{id}/status` `{ "status": "queued" }` | Resumes a paused task |
+| Cancel | `PUT /api/download-tasks/{id}/status` `{ "status": "canceled" }` | Cancels the task |
+| Retry | `POST /api/download-tasks/{id}/attempts` `{ "fresh": false }` | Retries from where the last attempt left off |
+| Restart | `POST /api/download-tasks/{id}/attempts` `{ "fresh": true }` | Restarts from the beginning |
+| Delete | `DELETE /api/download-tasks/{id}` | Removes the task record entirely |
+
+## Task Timeline
+
+`GET /api/download-tasks/{id}/events` returns the full timeline of state transitions and error events for a task. This is useful for diagnosing why a download failed — the timeline shows each state change with a timestamp and any associated error messages from the download engine.
+
+## Remote Downloader Hostname Detection
+
+When multiple downloader workers are registered with a ZPan instance, each is identified by its registered hostname. The hostname is detected automatically from the downloader's environment at registration time and is displayed in the Admin panel alongside its task queue and status. You can run multiple downloaders in different network locations (for example, one at home and one on a VPS) and assign tasks to a specific downloader based on which network can reach the source.

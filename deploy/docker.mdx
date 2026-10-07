@@ -1,0 +1,323 @@
+---
+title: "Deploy ZPan with Docker and Docker Compose"
+sidebarTitle: "Docker"
+description: "Run ZPan as a Docker container with local SQLite or Turso/libSQL. Includes RustFS for self-hosted S3-compatible storage with zero external dependencies."
+---
+
+ZPan ships as a single Docker image published to `ghcr.io/saltbo/zpan`. The image bundles the Hono API server and the React SPA. By default it uses an embedded SQLite database via `better-sqlite3`, which requires no external database setup and works out of the box. For production deployments that need multi-replica support or a managed remote database, you can switch to [Turso](https://turso.tech) (libSQL) by setting two environment variables. A CLI-only variant of the image (the downloader service) is published under the matching `-cli` suffix.
+
+## Image Tags
+
+Images are published to `ghcr.io/saltbo/zpan`. A CLI-only variant for the downloader is published under the matching `-cli` suffix (e.g. `ghcr.io/saltbo/zpan:latest-cli`).
+
+| Tag | Built from | Rebuild cadence | Use for |
+|-----|-----------|----------------|---------|
+| `latest`, `2.6.1`, `2.6`, `2` | Release tags (`v*`) | On every release | **Production** — stable, version-pinned |
+| `dev` | `main` HEAD | Every push to `main` after CI passes | Trying newest code as soon as it lands |
+| `nightly` | `main` HEAD | Daily full no-cache rebuild | Newest code **plus** fresh base-image and OS security patches |
+
+<Warning>
+`dev` and `nightly` are moving, unreviewed tags. Do not pin production deployments to them. Pulling without a tag (`ghcr.io/saltbo/zpan`) resolves to `latest`.
+</Warning>
+
+## Quick Start
+
+Pull the pre-built image and bring your own S3 storage:
+
+```bash
+curl -O https://raw.githubusercontent.com/saltbo/zpan/main/deploy/docker-compose.yml
+docker compose up -d
+```
+
+After the container starts, open `http://localhost:8222`, register your first account (it becomes the admin), then go to **Admin → Storages** to configure your S3-compatible bucket.
+
+## Compose Examples
+
+<CodeGroup>
+
+```yaml Local SQLite (default)
+# deploy/docker-compose.yml
+name: zpan
+
+services:
+  zpan:
+    image: ghcr.io/saltbo/zpan:latest
+    ports:
+      - "8222:8222"
+    environment:
+      - PORT=8222
+      - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET:-}
+      - BETTER_AUTH_URL=${BETTER_AUTH_URL:-http://localhost:8222}
+      - DATABASE_URL=/data/zpan.db
+    volumes:
+      - zpan-data:/data
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8222/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+
+  downloader:
+    image: ghcr.io/saltbo/zpan:latest-cli
+    hostname: zpan-downloader
+    command: ["--config", "/data/config.yaml", "downloader", "up"]
+    ports:
+      - "${ZPAN_BT_PORT:-6881}:${ZPAN_DOWNLOADER_BT_LISTEN_PORT:-6881}/tcp"
+      - "${ZPAN_BT_PORT:-6881}:${ZPAN_DOWNLOADER_BT_LISTEN_PORT:-6881}/udp"
+    environment:
+      - ZPAN_SERVER_URL=http://zpan:8222
+      - ZPAN_DOWNLOADER_ENGINE=${ZPAN_DOWNLOADER_ENGINE:-auto}
+      - ZPAN_DOWNLOADER_DOWNLOAD_DIR=/data/downloads
+      - ZPAN_DOWNLOADER_STATE_DIR=/data/state
+      - ZPAN_DOWNLOADER_BT_LISTEN_PORT=${ZPAN_DOWNLOADER_BT_LISTEN_PORT:-6881}
+      - ZPAN_DOWNLOADER_SEED_CACHE_LIMIT=${ZPAN_DOWNLOADER_SEED_CACHE_LIMIT:-10GB}
+    volumes:
+      - downloader-data:/data
+      - /etc/hostname:/host/etc/hostname:ro
+    depends_on:
+      zpan:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  zpan-data:
+  downloader-data:
+```
+
+```yaml RustFS (self-hosted S3)
+# deploy/docker-compose.rustfs.yml
+name: zpan
+
+services:
+  zpan:
+    image: ghcr.io/saltbo/zpan:latest
+    ports:
+      - "8222:8222"
+    environment:
+      - PORT=8222
+      - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET:-}
+      - BETTER_AUTH_URL=${BETTER_AUTH_URL:-http://localhost:8222}
+      - DATABASE_URL=/data/zpan.db
+    volumes:
+      - zpan-data:/data
+    depends_on:
+      rustfs:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8222/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+
+  downloader:
+    image: ghcr.io/saltbo/zpan:latest-cli
+    hostname: zpan-downloader
+    command: ["--config", "/data/config.yaml", "downloader", "up"]
+    ports:
+      - "${ZPAN_BT_PORT:-6881}:${ZPAN_DOWNLOADER_BT_LISTEN_PORT:-6881}/tcp"
+      - "${ZPAN_BT_PORT:-6881}:${ZPAN_DOWNLOADER_BT_LISTEN_PORT:-6881}/udp"
+    environment:
+      - ZPAN_SERVER_URL=http://zpan:8222
+      - ZPAN_DOWNLOADER_ENGINE=${ZPAN_DOWNLOADER_ENGINE:-auto}
+      - ZPAN_DOWNLOADER_DOWNLOAD_DIR=/data/downloads
+      - ZPAN_DOWNLOADER_STATE_DIR=/data/state
+      - ZPAN_DOWNLOADER_BT_LISTEN_PORT=${ZPAN_DOWNLOADER_BT_LISTEN_PORT:-6881}
+      - ZPAN_DOWNLOADER_SEED_CACHE_LIMIT=${ZPAN_DOWNLOADER_SEED_CACHE_LIMIT:-10GB}
+    volumes:
+      - downloader-data:/data
+      - /etc/hostname:/host/etc/hostname:ro
+    depends_on:
+      zpan:
+        condition: service_healthy
+    restart: unless-stopped
+
+  rustfs:
+    image: rustfs/rustfs:latest
+    command: ["server", "/data", "--console-address", ":9001"]
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      - RUSTFS_ROOT_USER=admin
+      - RUSTFS_ROOT_PASSWORD=admin123
+    volumes:
+      - rustfs-data:/data
+    restart: unless-stopped
+
+volumes:
+  zpan-data:
+  downloader-data:
+  rustfs-data:
+```
+
+</CodeGroup>
+
+## Starting with RustFS
+
+RustFS is an S3-compatible object storage server. Use the RustFS compose file for a completely self-contained setup with zero external dependencies:
+
+```bash
+curl -O https://raw.githubusercontent.com/saltbo/zpan/main/deploy/docker-compose.rustfs.yml
+docker compose -f docker-compose.rustfs.yml up -d
+```
+
+After startup:
+
+<Steps>
+  <Step title="Create a bucket in RustFS">
+    Open the RustFS console at `http://localhost:9001` (credentials: `admin` / `admin123`) and create a bucket, for example `zpan-bucket`.
+  </Step>
+
+  <Step title="Register your ZPan account">
+    Open ZPan at `http://localhost:8222` and register a user. The first user to register is automatically granted admin privileges.
+  </Step>
+
+  <Step title="Add RustFS as a storage provider">
+    Go to **Admin → Storages → Add storage** and fill in the following details:
+
+    | Field | Value |
+    |-------|-------|
+    | Endpoint | `http://localhost:9000` |
+    | Bucket | The bucket name you created |
+    | Region | `us-east-1` |
+    | Access Key | `admin` |
+    | Secret Key | `admin123` |
+
+    <Warning>
+    The storage endpoint must be reachable from the **client browser**, not just from the Docker network. Files upload directly from the browser to S3 via presigned URLs. Use `http://localhost:9000` for local development, or your server's public IP/hostname for production.
+    </Warning>
+  </Step>
+</Steps>
+
+## Environment Variables
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `PORT` | No | `8222` | Port the HTTP server listens on inside the container |
+| `BETTER_AUTH_SECRET` | Yes (production) | — | Signing secret for auth sessions. Generate with `openssl rand -base64 32` |
+| `BETTER_AUTH_URL` | Yes (production) | `http://localhost:8222` | Public URL of your ZPan instance, used for auth callbacks |
+| `DATABASE_URL` | No | — | Path to the SQLite database file, e.g. `/data/zpan.db`. Ignored when `TURSO_DATABASE_URL` is set |
+| `TURSO_DATABASE_URL` | No | — | Turso (libSQL) database URL. When set, overrides `DATABASE_URL` |
+| `TURSO_AUTH_TOKEN` | No | — | Turso auth token. Required for remote `libsql://` URLs; omit for local `file://` URLs |
+| `REFRESH_CRON_SECRET` | No | — | Bearer token for manually triggering entitlement refresh and traffic sync endpoints |
+
+## Turso (libSQL) Opt-in
+
+Set `TURSO_DATABASE_URL` to switch from local SQLite to a Turso or self-hosted libSQL database. This is recommended for multi-replica setups or when you want a managed remote database:
+
+```yaml
+services:
+  zpan:
+    image: ghcr.io/saltbo/zpan:latest
+    ports:
+      - "8222:8222"
+    environment:
+      PORT: 8222
+      BETTER_AUTH_SECRET: <generate with: openssl rand -base64 32>
+      BETTER_AUTH_URL: https://your-domain.example
+      TURSO_DATABASE_URL: libsql://your-db-name-orgname.turso.io
+      TURSO_AUTH_TOKEN: <your-turso-auth-token>
+    restart: unless-stopped
+```
+
+When `TURSO_DATABASE_URL` is present, `DATABASE_URL` is ignored and migrations are applied automatically at startup via `drizzle-orm/libsql/migrator`.
+
+To create a Turso database and obtain a token:
+
+```bash
+turso db create zpan
+turso db show zpan --url        # → TURSO_DATABASE_URL
+turso db tokens create zpan     # → TURSO_AUTH_TOKEN
+```
+
+## Downloader Service
+
+The downloader service runs alongside ZPan and handles remote download tasks (HTTP, magnet links, torrents). It is included in the default compose files as an optional companion using the `-cli` image variant.
+
+On first start, the downloader prints a device authorization URL in the container logs and waits:
+
+```bash
+docker compose logs downloader
+# → Open: https://your-zpan.example.com/auth/device?code=XXXX-XXXX
+```
+
+Open that URL while logged in as an admin user. After approval, the downloader registers itself, saves its token to `/data/config.yaml`, and begins processing tasks.
+
+### Running a standalone remote downloader
+
+To run a downloader on a separate machine (for example, one with better network access or fewer source-site restrictions):
+
+```bash
+ZPAN_SERVER_URL=https://your-zpan.example.com \
+docker compose -f deploy/docker-compose.downloader.yml up -d
+```
+
+### Downloader environment variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ZPAN_SERVER_URL` | — | URL of the ZPan server the downloader reports to |
+| `ZPAN_DOWNLOADER_ENGINE` | `auto` | Download engine: `auto` (tries aria2 then qBittorrent), `qbittorrent` |
+| `ZPAN_DOWNLOADER_DOWNLOAD_DIR` | `/data/downloads` | Directory for active download files |
+| `ZPAN_DOWNLOADER_STATE_DIR` | `/data/state` | Directory for task state and ledger files |
+| `ZPAN_DOWNLOADER_BT_LISTEN_PORT` | `6881` | BitTorrent listen port inside the container |
+| `ZPAN_DOWNLOADER_SEED_CACHE_LIMIT` | `10GB` | Maximum disk used by retained seed files before oldest are cleaned |
+| `ZPAN_BT_PORT` | `6881` | Host port mapped to the BitTorrent listen port |
+
+<Tip>
+Keep the BitTorrent port reachable from the internet for effective seeding and better peer connectivity. If you run multiple downloader containers on the same host, assign each a unique `ZPAN_BT_PORT`, for example `ZPAN_BT_PORT=6882`.
+</Tip>
+
+The downloader mounts `/etc/hostname` read-only so it can register with the host machine's name. On Linux hosts this happens automatically; on other platforms the container hostname is used as a fallback.
+
+## WebDAV Proxy Setup
+
+To expose WebDAV at the root of a dedicated hostname, enable WebDAV in Admin Settings, set the site's **Public URL**, and configure your reverse proxy to route `dav.<public-hostname>` to ZPan while internally prefixing requests with `/dav`. A custom hostname can also be configured directly in the WebDAV settings drawer. Until verification succeeds, ZPan advertises the original `/dav/` endpoint on the primary domain.
+
+## Pro Licensing Timers
+
+The Docker container runs a persistent Node.js process, so ZPan's built-in background timers fire automatically — **no external cron is required**:
+
+- Entitlement certificate refresh: every **6 hours**
+- Metered traffic sync: every **10 minutes**
+
+If you prefer an explicit external trigger — for example, to refresh immediately after a plan change or to integrate with your monitoring setup — set `REFRESH_CRON_SECRET` and call the endpoints manually:
+
+```bash
+# Generate a secret
+openssl rand -hex 32
+```
+
+Add it to your container environment:
+
+```yaml
+environment:
+  REFRESH_CRON_SECRET: <the-secret>
+```
+
+Then trigger a refresh or traffic sync with an authenticated POST request:
+
+```bash
+# License entitlement refresh
+curl -s -X POST \
+  -H "Authorization: Bearer <REFRESH_CRON_SECRET>" \
+  https://your-domain.example/api/internal/licensing/refresh-runs
+
+# Traffic sync
+curl -s -X POST \
+  -H "Authorization: Bearer <REFRESH_CRON_SECRET>" \
+  https://your-domain.example/api/internal/traffic-sync-runs
+```
+
+To run these on a schedule via host cron:
+
+```cron
+0 */6 * * * curl -s -X POST -H "Authorization: Bearer <REFRESH_CRON_SECRET>" "https://your-domain.example/api/internal/licensing/refresh-runs"
+*/10 * * * * curl -s -X POST -H "Authorization: Bearer <REFRESH_CRON_SECRET>" "https://your-domain.example/api/internal/traffic-sync-runs"
+```
+
+If `REFRESH_CRON_SECRET` is not set, the endpoints return `401` for all requests.

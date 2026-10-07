@@ -1,0 +1,139 @@
+---
+title: "Configure S3-Compatible Storage Backends in ZPan"
+sidebarTitle: "Storage Backends"
+description: "Connect ZPan to any S3-compatible storage bucket. Supports Cloudflare R2, AWS S3, Backblaze B2, MinIO, RustFS, Tigris, and any S3-protocol-compatible service."
+---
+
+ZPan stores no files itself. Every file upload travels directly from the user's browser to your object storage bucket via a presigned URL that ZPan generates. This means your storage backend must be reachable from the browser, not just from the ZPan server. You can configure one or more backends; each workspace or user can be assigned to a different storage backend by the administrator.
+
+## Where to Configure
+
+Navigate to **Admin → Storage** and click **Add storage**. You will need credentials and an endpoint URL for your chosen provider before you begin.
+
+## Required Fields
+
+| Field | Description |
+|---|---|
+| `endpoint` | The S3-compatible API URL. Must be reachable from the **client browser**, not just the ZPan server. |
+| `bucket` | The name of the bucket ZPan will read from and write to. |
+| `region` | The region the bucket belongs to. Defaults to `auto` if not specified. |
+| `accessKey` | The access key ID for the storage credential. Shown after creation. |
+| `secretKey` | The secret access key. Write-only — not returned by the API after creation. |
+| `capacity` | Optional storage capacity limit for this backend in bytes. Set to `0` for unlimited. |
+| `forcePathStyle` | When `true`, uses path-style URLs (`endpoint/bucket/key`). Required for MinIO and most self-hosted S3 servers. Defaults to `true`. |
+
+<Warning>
+The `endpoint` value must be a URL that browsers can reach directly. For Docker deployments with self-hosted storage such as RustFS or MinIO, this means the public address of your storage server — not a Docker internal hostname like `http://minio:9000`. Using an internal hostname causes presigned URL uploads to fail silently in the browser.
+</Warning>
+
+## Supported Providers
+
+| Provider | Type | Notes |
+|---|---|---|
+| Cloudflare R2 | Managed S3-compatible | Zero egress fees. Endpoint format: `https://<account-id>.r2.cloudflarestorage.com`. Region should be `auto`. |
+| AWS S3 | Managed S3 | The original S3. Endpoint format: `https://s3.<region>.amazonaws.com`. Region is required and must match the bucket's actual region. |
+| Backblaze B2 | Managed S3-compatible | S3-compatible API. Endpoint format: `https://s3.<region>.backblazeb2.com`. Region is the B2 region code, e.g. `us-west-004`. |
+| MinIO | Self-hosted | Open-source S3-compatible server. Set `forcePathStyle: true`. Endpoint is the public URL of your MinIO server. |
+| RustFS | Self-hosted | S3-compatible server written in Rust. Set `forcePathStyle: true`. Endpoint is the public URL of your RustFS server. |
+| Tigris | Managed S3-compatible | Globally distributed object storage. Endpoint format: `https://fly.storage.tigris.dev`. |
+
+### Provider-Specific Notes
+
+**Cloudflare R2** charges no egress fees for data transferred out to the internet, which makes it a natural pairing with ZPan deployed on Cloudflare Workers. Use `auto` as the region value. Your R2 endpoint is shown in the Cloudflare dashboard under **R2 → Overview → Bucket → Settings**.
+
+**AWS S3** requires that the region in ZPan exactly matches the region the bucket was created in. If they do not match, presigned URL requests will fail with a region-redirect error.
+
+**Backblaze B2** uses region codes in a specific format. A bucket in the US West region is accessed at `s3.us-west-004.backblazeb2.com`. Check the B2 dashboard for your bucket's endpoint.
+
+**MinIO and RustFS** are self-hosted S3-compatible servers. Always set `forcePathStyle` to `true` for these providers. The endpoint must be the publicly accessible address of your MinIO or RustFS server, including port if non-standard. For local development with Docker Compose, use `http://localhost:9000` rather than the container name.
+
+**Tigris** is a globally distributed object storage layer. Use the endpoint `https://fly.storage.tigris.dev` and `auto` as the region.
+
+## CORS Requirements
+
+Because ZPan uploads files directly from the browser to S3, your bucket must allow cross-origin `PUT` requests from the domain where ZPan is hosted. Without correct CORS configuration, uploads will fail with a network error in the browser.
+
+At minimum, your bucket's CORS policy must allow:
+
+- **Allowed origins**: Your ZPan domain (e.g. `https://files.example.com`)
+- **Allowed methods**: `PUT`, `GET`, `HEAD`
+- **Allowed headers**: `Content-Type`, `Content-MD5`, and any headers required by your provider
+
+A typical CORS configuration for AWS S3 or R2 looks like this:
+
+```json
+[
+  {
+    "AllowedOrigins": ["https://files.example.com"],
+    "AllowedMethods": ["GET", "PUT", "HEAD"],
+    "AllowedHeaders": ["Content-Type", "Content-MD5", "*"],
+    "MaxAgeSeconds": 3600
+  }
+]
+```
+
+<Note>
+For development, you can temporarily set `AllowedOrigins` to `["*"]`. Restrict this to your specific domain before going to production.
+</Note>
+
+ZPan performs a health check on the storage backend after you save it. If the health status shows `cors` as the reason, the bucket's CORS policy is blocking browser access. Check the browser developer console for the specific blocked request.
+
+## Storage Health Status
+
+Each storage backend shows a health status:
+
+| Status | Meaning |
+|---|---|
+| `unknown` | No health check has been performed yet. |
+| `healthy` | ZPan successfully reached the bucket and verified credentials. |
+| `unhealthy` | The health check failed. See the status reason for details. |
+
+Status reason codes when a backend is unhealthy:
+
+| Reason | Likely Cause |
+|---|---|
+| `cors` | The bucket is reachable but CORS policy blocks browser access. |
+| `authentication_failed` | The access key or secret key is wrong. |
+| `permission_denied` | Credentials are valid but lack permission for the required operations. |
+| `bucket_not_found` | The bucket name does not exist at this endpoint. |
+| `network_error` | The endpoint URL is not reachable from the ZPan server. |
+| `unknown` | An unexpected error occurred. Check the ZPan logs for details. |
+
+## Multiple Storage Backends
+
+ZPan supports adding more than one storage backend. Once multiple backends are configured, administrators can assign individual users or workspaces to a specific backend. This is useful for:
+
+- Offering different storage tiers (e.g. cheap archival storage vs. fast CDN-backed storage)
+- Isolating teams onto separate buckets for compliance reasons
+- Running a mixture of self-hosted and managed storage
+
+<Tip>
+Each storage backend tracks its own `used` byte count. ZPan sums usage per backend independently, so you can set a `capacity` limit on each one to prevent any single backend from being overfilled.
+</Tip>
+
+## Enabling and Disabling Backends
+
+Each storage backend has an `enabled` toggle. Disabling a backend prevents new files from being uploaded to it while preserving access to files already stored there. Re-enabling it restores the ability to upload. A storage backend that is referenced by existing files cannot be deleted — disable it instead if you no longer want new uploads directed to it.
+
+## Adding Storage: Step by Step
+
+<Steps>
+  <Step title="Open the storage panel">
+    In ZPan, navigate to **Admin → Storage** and click **Add storage**.
+  </Step>
+  <Step title="Enter your endpoint and bucket">
+    Paste the endpoint URL for your storage provider and enter the bucket name. For self-hosted providers, ensure the endpoint is publicly accessible from a browser.
+  </Step>
+  <Step title="Set the region">
+    Enter the region for your bucket. Use `auto` for Cloudflare R2 and Tigris. Use the exact region code for AWS S3 and Backblaze B2.
+  </Step>
+  <Step title="Enter your credentials">
+    Provide the access key ID and secret access key for your storage credential. The secret key is stored securely and is never returned by the API after this step.
+  </Step>
+  <Step title="Configure CORS on your bucket">
+    Before saving, ensure your bucket's CORS policy allows `PUT` requests from your ZPan domain. ZPan will run a health check after you save.
+  </Step>
+  <Step title="Save and verify health">
+    Click **Save**. ZPan will perform a health check. If the status shows `unhealthy`, review the reason code and correct the endpoint URL, credentials, or CORS configuration accordingly.
+  </Step>
+</Steps>

@@ -1,0 +1,191 @@
+---
+title: "OAuth 2.1 External App Integration"
+sidebarTitle: "OAuth"
+description: "ZPan acts as an OAuth 2.1 authorization server. External apps use dynamic client registration, pushed authorization requests, and DPoP-bound tokens to access the API."
+---
+
+ZPan is both an OAuth 2.1 authorization server and the protected resource for its HTTP API. External applications — including Agent platforms, CI tools, and third-party integrations — can dynamically register their own OAuth client, request user consent, and receive short-lived DPoP-bound access tokens that are accepted by every protected ZPan endpoint. The integration is grounded in a suite of modern OAuth standards and is designed to work with generic OAuth 2.1 clients without ZPan-specific knowledge.
+
+## Authorization Model
+
+ZPan's authorization model has three independent dimensions that are evaluated together at every protected route:
+
+- **Scope** — declares what categories of operations a token is permitted to perform (for example `objects:read` or `images:upload`).
+- **Authorization details** (RFC 9396) — declares which specific workspace the token may affect. A token that omits workspace details, or that carries more than one workspace detail, is rejected by the resource middleware.
+- **Site and workspace roles** — server-enforced membership checks that apply at request time, independent of the token. Possessing a scope does not bypass a role check. Membership or administrator changes take effect immediately without waiting for token expiry.
+
+Session cookies, API keys, OAuth tokens, and specialized service credentials all enter the same route policy evaluator.
+
+---
+
+## Discovery Endpoints
+
+Clients begin by discovering ZPan's capabilities from well-known URLs. No ZPan-specific knowledge is required to bootstrap the integration.
+
+| Contract | Path |
+|---|---|
+| Authorization server metadata | `/.well-known/oauth-authorization-server/api/auth` |
+| Protected resource metadata | `/.well-known/oauth-protected-resource/api` |
+| Dynamic client registration | `/api/auth/oauth2/register` |
+| Dynamic client registration management (RFC 7592) | URI returned as `registration_client_uri` |
+| Pushed authorization requests | `/api/auth/oauth2/par` |
+| OpenAPI specification | `/api/openapi.json` |
+| Agent Skills discovery index | `/.well-known/agent-skills/index.json` |
+
+Authorization-server metadata advertises `scopes_supported`, `authorization_details_types_supported`, and `pushed_authorization_request_endpoint`. The same canonical `<resource>:<action>` scopes used by API keys (see [API Keys](/integrations/api-keys)) are advertised here. ZPan does not maintain a separate scope catalog endpoint.
+
+---
+
+## Dynamic Client Registration
+
+External clients register themselves by sending a `POST` request to the registration endpoint. No prior coordination with the ZPan operator is required.
+
+```bash
+POST /api/auth/oauth2/register
+Content-Type: application/json
+
+{
+  "client_name": "My Integration",
+  "redirect_uris": ["https://my-app.example/callback"],
+  "token_endpoint_auth_method": "client_secret_basic",
+  "authorization_details_types": [
+    "https://zpan.space/authorization-details/workspace"
+  ]
+}
+```
+
+A successful response returns the client credentials and management details:
+
+| Field | Description |
+|---|---|
+| `client_id` | Stable identifier for this registration |
+| `client_secret` | Returned once at registration; never returned again |
+| `registration_access_token` | Opaque token authenticating RFC 7592 management requests; stored only as a hash |
+| `registration_client_uri` | Client-specific management URI |
+
+Clients that declare `authorization_details_types` during registration have those types persisted and echoed in future metadata. Unknown types are rejected as invalid client metadata.
+
+<Warning>
+  The `client_secret` and `registration_access_token` are each returned exactly once. Store them securely before the registration response is discarded. Clients registered before RFC 7592 support was introduced remain valid but do not have a management credential; create a new registration if management access is needed.
+</Warning>
+
+### RFC 7592 Client Management
+
+The `registration_client_uri` returned at registration time supports the full RFC 7592 lifecycle using the `registration_access_token` as a Bearer credential:
+
+| Method | Action |
+|---|---|
+| `GET` | Read current client configuration |
+| `PUT` | Full replacement update of client metadata |
+| `DELETE` | Delete the registration |
+
+Configuration reads and updates never return the `client_secret`; the secret is issued only at initial registration.
+
+---
+
+## Pushed Authorization Requests
+
+ZPan supports and recommends Pushed Authorization Requests (PAR, RFC 9126) to keep sensitive parameters server-side and out of front-channel URLs.
+
+1. Send the full authorization request to `/api/auth/oauth2/par`. ZPan authenticates the client, validates all parameters, and returns a `request_uri` that is valid for 90 seconds.
+2. Redirect the user to `/api/auth/oauth2/authorize` with only `client_id` and `request_uri`. ZPan consumes the stored request on first use.
+
+PAR keeps workspace details, requested scopes, redirect URI, PKCE challenge, and state bound to one server-side object while avoiding any disclosure in the browser's address bar or history.
+
+<Note>
+  Direct authorization parameters (without PAR) remain supported for clients that cannot use PAR. However, PAR is the recommended path for production integrations, especially those involving workspace authorization details.
+</Note>
+
+---
+
+## Workspace Authorization Details
+
+ZPan defines the following RFC 9396 authorization detail type to scope a token to a specific workspace:
+
+```json
+{
+  "type": "https://zpan.space/authorization-details/workspace",
+  "identifier": "workspace-id"
+}
+```
+
+Including this object in an authorization request restricts the resulting token to the specified workspace. If `identifier` is omitted, the consent page asks the user to choose one or more workspaces from their visible memberships.
+
+Key behaviours of the workspace authorization detail:
+
+- A request that includes an `identifier` is locked to that workspace. The consent page cannot widen the selection.
+- The granted workspace array is persisted on the consent record, authorization code, access token, and the entire refresh-token family.
+- `authorization_details` appears as a top-level claim in JWT access tokens. Refresh rotation preserves it.
+- The resource middleware rejects any token that carries zero or more than one workspace detail.
+
+Clients that want to enumerate a user's workspaces before requesting resource access can request the account-only `workspaces:discover` scope. The authorization-server metadata advertises both `authorization_details_catalog_endpoint` and `authorization_details_catalog_scope` so that a generic broker can locate the catalog without ZPan-specific configuration.
+
+---
+
+## DPoP-Bound Tokens
+
+All ZPan access tokens are bound to the client's key pair using RFC 9449 Demonstrating Proof of Possession (DPoP). Each API request must include a DPoP proof header tied to the request method, URL, and access token hash. This prevents stolen tokens from being replayed by a different client.
+
+---
+
+## Agent Token Exchange
+
+For Agent platform integrations, ZPan uses a three-credential pattern based on RFC 8693 token exchange:
+
+1. **Subject token** — the user-approved OAuth access token. It represents the connected account and may contain multiple workspace authorization details.
+2. **Actor JWT** — a short-lived signed assertion that identifies the Agent platform. It mints an actor token for the specific agent instance.
+3. **Exchanged token** — the result of combining both credentials with the requested scopes, the `/api` resource audience, and exactly one workspace authorization detail. This is the DPoP-bound token used for API requests.
+
+The exchanged JWT contains the standard claims: `iss`, `sub`, `aud`, `client_id`, `scope`, `exp`, `jti`, `act` (actor), `cnf` (confirmation / DPoP key), and `authorization_details`.
+
+Each RFC 8693 exchange must select exactly one workspace from those approved on the subject token. The resulting agent token is therefore always locked to a single workspace and a single DPoP key.
+
+---
+
+## Consent and Revocation
+
+Consent is recorded per user and per registered client. It stores the approved scopes and workspace details. Re-authorising the same client updates the single consent record rather than creating a duplicate.
+
+The **Settings → OAuth Apps** page lists every active grant, showing the approved workspaces and scopes for each connected application.
+
+Revoking a grant:
+
+- Immediately deletes all access tokens associated with the grant.
+- Revokes the entire live refresh-token family.
+- Deletes the consent record.
+- Records the JTI of any exchanged JWT until its natural expiry so that the resource server can reject it immediately.
+
+---
+
+## Direct Upload with OAuth Tokens
+
+File bytes travel directly to S3-compatible storage through presigned URLs, regardless of whether the client authenticated with a session cookie, API key, or OAuth token. An Agent or integration that needs to upload a file should:
+
+1. Call the create-object endpoint to obtain an upload descriptor and presigned URL.
+2. Upload directly to the presigned URL, retaining any part ETags for multipart uploads.
+3. Call the complete-upload endpoint.
+
+If the workspace has insufficient quota, the create-object response is an x402 payment challenge. After purchasing capacity, repeat the same create-object request and continue.
+
+<Warning>
+  Presigned storage URLs are short-lived bearer capabilities. Do not log them, cache them beyond their TTL, or persist them in connection state.
+</Warning>
+
+The upload workflow is described by stable OpenAPI operation IDs at `/api/openapi.json` and the Arazzo workflow document at `/api/workflows.arazzo.json`.
+
+---
+
+## Supported Standards
+
+ZPan's OAuth implementation is grounded in the following specifications:
+
+| Standard | Description |
+|---|---|
+| OAuth 2.1 | Core authorization framework |
+| RFC 7591 | Dynamic client registration |
+| RFC 7592 | Dynamic client registration management |
+| RFC 8693 | Token exchange |
+| RFC 8707 | Resource indicators |
+| RFC 9126 | Pushed authorization requests (PAR) |
+| RFC 9396 | Rich authorization requests |
+| RFC 9449 | DPoP-bound tokens |

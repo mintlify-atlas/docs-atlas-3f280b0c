@@ -1,0 +1,123 @@
+{
+  "projectType": "saas",
+  "projectName": "ZPan",
+  "projectDescription": "A lightweight, self-hosted file hosting platform built on S3-compatible object storage, deployable on Cloudflare Workers, Docker, AWS Lambda, Vercel, Netlify, and Google Cloud Run.",
+  "theme": "palm",
+  "primaryColor": "#12977b",
+  "lightColor": "#f7faf9",
+  "darkColor": "#25b5ac",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Deployment",
+            "pages": [
+              "deploy/cloudflare-workers",
+              "deploy/docker",
+              "deploy/aws-lambda",
+              "deploy/vercel",
+              "deploy/netlify",
+              "deploy/cloud-run"
+            ]
+          },
+          {
+            "group": "Core Features",
+            "pages": [
+              "features/file-management",
+              "features/sharing",
+              "features/image-hosting",
+              "features/webdav",
+              "features/remote-download",
+              "features/teams"
+            ]
+          },
+          {
+            "group": "Configuration",
+            "pages": [
+              "configuration/storage-backends",
+              "configuration/authentication",
+              "configuration/image-custom-domains",
+              "configuration/webdav-domain"
+            ]
+          },
+          {
+            "group": "Integrations",
+            "pages": [
+              "integrations/tool-integrations",
+              "integrations/api-keys",
+              "integrations/oauth"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": [
+              "api/overview",
+              "api/authentication"
+            ]
+          },
+          {
+            "group": "Endpoints",
+            "pages": [
+              "api/objects",
+              "api/shares",
+              "api/image-hosting",
+              "api/download-tasks",
+              "api/teams",
+              "api/admin"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Direct browser-to-S3 uploads via presigned URLs — zero server bandwidth",
+    "Cloudflare Workers deployment with D1 database and R2 storage",
+    "Docker, AWS Lambda, Vercel, Netlify, and Google Cloud Run support",
+    "File sharing with password protection, expiry, download limits, and direct links",
+    "Image hosting with PicGo, PicList, uPic, ShareX, and Flameshot integrations",
+    "WebDAV access with optional dedicated custom domain",
+    "Remote download tasks with separately deployable downloader workers",
+    "Teams and workspaces with per-org quota ownership",
+    "API key authentication with fine-grained scope control",
+    "OAuth 2.1 authorization server for external app integrations",
+    "Per-user public homepage at /u/username for browsable file collections",
+    "Admin analytics, audit events, branding, and storage management"
+  ],
+  "publicApiSurface": [
+    "POST /api/objects — create file or folder",
+    "POST /api/objects/{id}/uploads/{uploadSessionId}/parts — re-sign upload parts",
+    "POST /api/objects/{id}/uploads/{uploadSessionId}/completions — complete upload",
+    "DELETE /api/objects/{id}/uploads/{uploadSessionId} — abort upload",
+    "GET /api/objects — list files and folders",
+    "PATCH /api/objects/{id} — update file/folder metadata",
+    "DELETE /api/objects/{id} — trash or delete object",
+    "POST /api/shares — create share link",
+    "GET /api/shares — list shares",
+    "DELETE /api/shares/{id} — revoke share",
+    "GET /api/ihost/images — list hosted images",
+    "POST /api/ihost/images — upload image",
+    "GET /api/downloads — list remote download tasks",
+    "POST /api/downloads — create remote download task",
+    "GET /api/events — SSE stream for real-time updates",
+    "GET /api/openapi.json — OpenAPI specification",
+    "GET /api/workflows.arazzo.json — upload workflow descriptor",
+    "GET /.well-known/oauth-authorization-server/api/auth — OAuth server metadata",
+    "POST /api/auth/oauth2/register — dynamic client registration (RFC 7591)",
+    "WebDAV at /dav/ — full WebDAV protocol"
+  ]
+}

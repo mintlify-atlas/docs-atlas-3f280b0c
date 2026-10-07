@@ -1,0 +1,177 @@
+---
+title: "Deploy ZPan on Netlify Functions"
+sidebarTitle: "Netlify"
+description: "Deploy ZPan to Netlify using Netlify Functions v2 (Node.js ESM) and Turso. Free tier covers personal use with 125,000 function invocations per month."
+---
+
+ZPan runs on Netlify via [Netlify Functions v2](https://docs.netlify.com/functions/overview/) using Node.js ESM. The React SPA is served from Netlify's CDN, and all API requests are handled by a single Netlify Function that connects to a [Turso](https://turso.tech) (libSQL) database. File storage uses any S3-compatible bucket — Cloudflare R2 is recommended for its zero egress fees.
+
+The free tier covers 125,000 function invocations per month, 100 GB bandwidth, and unlimited static hosting. Turso's free tier covers 9 GB storage, 1 B row reads, and 25 M row writes per month — enough for personal use at $0 per month.
+
+## Prerequisites
+
+<Steps>
+  <Step title="Fork the repository">
+    Go to [github.com/saltbo/zpan](https://github.com/saltbo/zpan) and click **Fork**.
+  </Step>
+
+  <Step title="Create a Turso database">
+    ```bash
+    curl -sSfL https://get.tur.so/install.sh | bash
+    turso auth signup           # GitHub OAuth — no credit card
+    turso db create zpan
+    turso db show zpan --url    # → TURSO_DATABASE_URL value
+    turso db tokens create zpan # → TURSO_AUTH_TOKEN value
+    ```
+
+    Alternatively, use the [Turso dashboard](https://app.turso.tech) — no CLI needed.
+  </Step>
+
+  <Step title="Create a Netlify site">
+    In your browser, go to [app.netlify.com](https://app.netlify.com) → **Add new site → Deploy manually**, then note your **Site ID** from **Site configuration → General**.
+
+    Or use the CLI:
+
+    ```bash
+    pnpm add --global netlify-cli
+    netlify login
+    netlify sites:create --name my-zpan
+    ```
+  </Step>
+
+  <Step title="Get a Netlify personal access token">
+    Go to [app.netlify.com/user/applications](https://app.netlify.com/user/applications) → **Personal access tokens → New access token**.
+  </Step>
+</Steps>
+
+## GitHub Secrets
+
+In your fork, go to **Settings → Secrets and variables → Actions → New repository secret** and add:
+
+| Secret | Value |
+|--------|-------|
+| `TURSO_DATABASE_URL` | `libsql://your-db-name-orgname.turso.io` |
+| `TURSO_AUTH_TOKEN` | Turso auth token from the setup step above |
+| `NETLIFY_AUTH_TOKEN` | Netlify personal access token |
+| `NETLIFY_SITE_ID` | Site ID from your Netlify site settings |
+| `BETTER_AUTH_SECRET` | *(optional)* — auto-generated on first deploy if omitted |
+
+<Note>
+**S3 bucket credentials are not GitHub Secrets.** After deploy, configure storage backends via **Admin → Storages** in the ZPan UI. This keeps bucket credentials out of CI logs and lets one ZPan instance manage multiple buckets.
+</Note>
+
+## Trigger Deployment
+
+Push to `main` or go to **Actions → Deploy to Netlify → Run workflow** to trigger manually.
+
+The workflow will:
+
+1. Resolve the latest ZPan release from the upstream repo
+2. Apply Turso migrations (`drizzle-kit migrate`)
+3. Build the React SPA and the Netlify Function
+4. Deploy to your Netlify site
+5. Auto-generate `BETTER_AUTH_SECRET` on first deploy if not provided
+6. Write the live URL to the workflow run summary
+
+Subsequent pushes redeploy without recreating resources.
+
+## First-Boot Storage Setup
+
+After the workflow reports success:
+
+<Steps>
+  <Step title="Open the deployed URL">
+    The URL is shown in the workflow run summary.
+  </Step>
+
+  <Step title="Register your first user">
+    Sign up — the first account automatically becomes the admin.
+  </Step>
+
+  <Step title="Add a storage provider">
+    Go to **Admin → Storages → Add storage** and fill in your S3-compatible bucket details (endpoint, region, access key, secret). ZPan verifies the bucket is reachable and marks it active.
+  </Step>
+</Steps>
+
+## Configuration
+
+### Environment Variables
+
+Set additional environment variables via the Netlify dashboard (**Site configuration → Environment variables**) or the CLI:
+
+```bash
+netlify env:set BETTER_AUTH_URL https://zpan.example.com --context production
+netlify env:set TRUSTED_ORIGINS https://zpan.example.com --context production
+```
+
+| Variable | Required | Notes |
+|----------|----------|-------|
+| `TURSO_DATABASE_URL` | Yes | Set as a GitHub Secret; the workflow passes it at build time |
+| `TURSO_AUTH_TOKEN` | Yes | Set as a GitHub Secret |
+| `BETTER_AUTH_SECRET` | Yes | Auto-generated on first deploy |
+| `BETTER_AUTH_URL` | Recommended | Set to your production URL (default: inferred from request origin) |
+| `TRUSTED_ORIGINS` | Recommended | Comma-separated allowed origins for auth cookies |
+
+### Custom Domain
+
+In the Netlify dashboard, go to **Domain management → Add a domain**. No changes to the workflow are required.
+
+### Running Migrations Manually
+
+```bash
+TURSO_DATABASE_URL=libsql://your-db.turso.io \
+TURSO_AUTH_TOKEN=your-token \
+pnpm db:migrate:node
+```
+
+## Free-Tier Limits
+
+| Resource | Free limit |
+|----------|-----------|
+| Netlify Functions | 125,000 invocations/month |
+| Netlify Bandwidth | 100 GB/month |
+| Turso Storage | 9 GB |
+| Turso Row reads | 1 B/month |
+| Turso Row writes | 25 M/month |
+
+Upgrade to Netlify Pro ($19/month) or Turso Scaler ($29/month) when you need more capacity.
+
+## Entitlement Refresh
+
+ZPan refreshes its entitlement certificate every 6 hours and syncs metered traffic every 10 minutes. Netlify has no persistent background process, so you need to trigger these calls from an external scheduler.
+
+### Setup
+
+<Steps>
+  <Step title="Generate a secret">
+    ```bash
+    openssl rand -hex 32
+    ```
+  </Step>
+
+  <Step title="Add the environment variable">
+    Via the Netlify dashboard (**Site configuration → Environment variables**) or CLI:
+
+    ```bash
+    netlify env:set REFRESH_CRON_SECRET <your-secret> --context production
+    ```
+  </Step>
+
+  <Step title="Schedule the calls">
+    Use [Netlify Scheduled Functions](https://docs.netlify.com/functions/scheduled-functions/) or an external cron service such as [cron-job.org](https://cron-job.org).
+
+    **License entitlement refresh** — every 6 hours:
+    ```
+    POST https://your-site.netlify.app/api/internal/licensing/refresh-runs
+    Authorization: Bearer <REFRESH_CRON_SECRET>
+    ```
+
+    **Traffic sync** — every 10 minutes:
+    ```
+    POST https://your-site.netlify.app/api/internal/traffic-sync-runs
+    Authorization: Bearer <REFRESH_CRON_SECRET>
+    ```
+  </Step>
+</Steps>
+
+If `REFRESH_CRON_SECRET` is not set, both endpoints return `401` for all requests.

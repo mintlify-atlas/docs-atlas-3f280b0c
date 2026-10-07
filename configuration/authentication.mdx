@@ -1,0 +1,162 @@
+---
+title: "Authentication Configuration: SSO, Social Login, and Email"
+sidebarTitle: "Authentication"
+description: "Configure ZPan authentication with email/password, social OAuth providers (GitHub, Google), OIDC, and email verification. Manage invite codes and registration settings."
+---
+
+ZPan uses [Better Auth](https://www.better-auth.com/) as its authentication layer. Out of the box, users can register and sign in with an email address and password. You can extend this with social OAuth providers, a custom OIDC provider, email verification, invite codes, and controlled registration modes. All authentication settings are managed in the Admin panel and through environment variables set at deployment time.
+
+## Environment Variables
+
+Two environment variables must be set before ZPan starts. They are not configurable through the Admin UI.
+
+| Variable | Purpose |
+|---|---|
+| `BETTER_AUTH_SECRET` | A random secret used to sign session cookies and tokens. Must be at least 32 characters. |
+| `BETTER_AUTH_URL` | The canonical public URL of your ZPan instance (e.g. `https://files.example.com`). Used to construct OAuth callback URLs and email verification links. |
+
+<Warning>
+If `BETTER_AUTH_SECRET` is changed after users have logged in, all existing sessions are immediately invalidated and every user is signed out. Treat this value like a signing key and keep it stable between deployments.
+</Warning>
+
+Generate a secure value for `BETTER_AUTH_SECRET` with:
+
+```bash
+openssl rand -base64 32
+```
+
+For Docker deployments, add both variables to your `docker-compose.yml` environment block:
+
+```yaml
+environment:
+  BETTER_AUTH_SECRET: <your-generated-secret>
+  BETTER_AUTH_URL: https://files.example.com
+```
+
+<Note>
+`BETTER_AUTH_URL` must exactly match the origin your users access ZPan from. OAuth providers validate redirect URIs against this value. An incorrect URL causes OAuth callbacks to fail with a redirect mismatch error.
+</Note>
+
+## First User and Admin Role
+
+The very first user to register on a fresh ZPan instance is automatically assigned the `admin` role. Subsequent registrations receive the standard user role. There is no separate admin account setup — simply deploy ZPan and register as the first user.
+
+## Email and Password
+
+Email and password authentication is always enabled. Users register with a name, email address, and password. Passwords are hashed using `scrypt` via native OpenSSL. There is no plaintext storage.
+
+### Email Verification
+
+Email verification is off by default. When enabled, new users receive a verification email before they can sign in. Enable it in **Admin → Settings → Registration**.
+
+For email verification — and for password reset emails — ZPan must be able to send email. Configure outbound email in **Admin → Settings → Email**. Without a configured email provider, verification emails are not sent, but users can still sign in.
+
+Session cookies use the `zp` prefix and are cached for up to 5 minutes on the client side to reduce database round-trips on every request.
+
+## Social OAuth Providers
+
+ZPan supports social login through any provider listed in better-auth's built-in provider catalog, including GitHub, Google, GitLab, Discord, Microsoft, and many others. Custom OIDC providers are also supported. Providers are configured per-instance in **Admin → Auth Providers**.
+
+<Steps>
+  <Step title="Create an OAuth application">
+    At your identity provider (for example, GitHub at [github.com/settings/developers](https://github.com/settings/developers) or Google at [console.cloud.google.com](https://console.cloud.google.com)), create a new OAuth application or credential.
+  </Step>
+  <Step title="Set the redirect URI">
+    The callback URL that ZPan expects follows this pattern:
+
+    ```
+    https://your-zpan-domain.example/api/auth/callback/<provider-id>
+    ```
+
+    For GitHub this is `/api/auth/callback/github`; for Google it is `/api/auth/callback/google`. The base origin is determined by `BETTER_AUTH_URL`.
+  </Step>
+  <Step title="Open Admin → Auth Providers">
+    In the ZPan Admin panel, navigate to **Auth Providers** and click the provider you want to enable, or create a new entry for a custom OIDC provider.
+  </Step>
+  <Step title="Enter client credentials">
+    Paste the **Client ID** and **Client Secret** from your OAuth application registration.
+  </Step>
+  <Step title="Enable the provider">
+    Toggle the provider to **Enabled** and save. The login button for that provider appears on the sign-in page immediately.
+  </Step>
+</Steps>
+
+### Built-in Providers
+
+All built-in better-auth social providers are available. Commonly used ones include:
+
+| Provider ID | Display Name |
+|---|---|
+| `github` | GitHub |
+| `google` | Google |
+| `gitlab` | GitLab |
+| `discord` | Discord |
+| `microsoft` | Microsoft |
+| `twitter` | Twitter / X |
+| `slack` | Slack |
+| `spotify` | Spotify |
+| `apple` | Apple |
+| `linkedin` | LinkedIn |
+
+The full list is defined in the ZPan source. Any provider ID from better-auth's built-in catalog can be added.
+
+### Custom OIDC Providers
+
+To connect a provider that is not in the built-in list — such as a self-hosted Keycloak, Authentik, Dex, or any standards-compliant IdP — use the `oidc` type.
+
+| Field | Description |
+|---|---|
+| `type` | Set to `oidc`. |
+| `clientId` | Client ID from your IdP's application registration. |
+| `clientSecret` | Client secret from your IdP's application registration. |
+| `discoveryUrl` | The OIDC discovery endpoint URL (ends in `/.well-known/openid-configuration`). |
+| `scopes` | Optional list of OAuth scopes to request. Defaults to `openid email profile`. |
+| `enabled` | Set to `true` to show the provider on the login page. |
+
+<Note>
+Provider configuration is loaded once when the ZPan auth instance starts. On Cloudflare Workers, changes take effect when the isolate recycles (on the next request after a brief warm-up). On Docker and Node.js, restart the container or process to apply changes immediately.
+</Note>
+
+## Registration Modes
+
+ZPan supports three registration modes, configurable in **Admin → Settings → Registration**.
+
+| Mode | Behavior |
+|---|---|
+| `open` | Anyone can register with a valid email address. |
+| `invite_only` | Registration requires a valid invite code. Admins generate codes in **Admin → Invite Codes**. |
+| `closed` | Registration is disabled. New users can only be added via site invitations sent by an admin. |
+
+<Tip>
+If you are running a personal or family instance, set registration to `closed` after the first few users have joined to prevent unexpected sign-ups.
+</Tip>
+
+### Invite Codes
+
+When registration mode is `invite_only`, every new user must provide a valid invite code during sign-up. Invite codes are single-use and can optionally carry an expiration date. Admins create and manage codes in **Admin → Invite Codes**.
+
+### Site Invitations (Closed Mode)
+
+In `closed` mode, admins can send direct email invitations from **Admin → Users → Invite User**. The invitation email contains a unique token that pre-authorizes registration for that specific email address. Each token is single-use.
+
+## Session Management
+
+ZPan uses cookie-based sessions signed with `BETTER_AUTH_SECRET`. Sessions are stored in the database and validated on each authenticated request. Cookies are cached for up to 5 minutes on the client to reduce database reads.
+
+Session cookies use the `zp` prefix (e.g. `zp.session_token`). Cookies are `HttpOnly` and `Secure` in production. Changing `BETTER_AUTH_SECRET` immediately invalidates all active sessions.
+
+## API Keys
+
+Authenticated users can generate personal API keys for use with image-hosting tools (PicGo, ShareX, uPic) and WebDAV clients. API keys are scoped by type:
+
+| Key Type | Permissions |
+|---|---|
+| Image hosting (`ihost`) | Upload files via the image-hosting API. Rate-limited to 60 requests per minute. |
+| WebDAV | WebDAV filesystem access across all user workspaces. |
+| Remote download | Authorize remote download tasks via the API. |
+
+API keys are managed by each user from their account settings. Admins can view and revoke keys in the Admin panel.
+
+## Trusted Origins
+
+ZPan automatically trusts requests from loopback and local network origins (e.g. `127.0.0.1`, LAN IPs) so self-hosted users can log in without extra configuration. On Cloudflare Workers, official Workers preview URLs for the same worker name are also trusted automatically. Additional trusted origins can be configured via the `TRUSTED_ORIGINS` environment variable as a comma-separated list if needed.

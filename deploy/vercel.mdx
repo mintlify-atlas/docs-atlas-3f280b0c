@@ -1,0 +1,168 @@
+---
+title: "Deploy ZPan on Vercel with Node.js Functions"
+sidebarTitle: "Vercel"
+description: "Deploy ZPan to Vercel using Node.js Functions and Turso as the database. The React SPA is served from Vercel's CDN with API routes handled by a Hono function."
+---
+
+ZPan supports Vercel as a first-class deployment target. The React SPA is served from Vercel's global CDN, while all API traffic is handled by a single Hono function running on the Node.js 22 runtime. [Turso](https://turso.tech) provides the libSQL-compatible remote database, and any S3-compatible bucket handles file storage.
+
+<Note>
+**The Edge runtime is not supported.** `@aws-sdk/client-s3` depends on Node.js APIs (streams, crypto) that are unavailable in the Edge runtime. All Vercel Functions for ZPan run on the `nodejs22.x` runtime.
+</Note>
+
+## Prerequisites
+
+| Tool | Purpose |
+|------|---------|
+| [Vercel account](https://vercel.com) | Hosts the application |
+| [Turso database](https://turso.tech) | libSQL-compatible remote database |
+| S3-compatible storage | File storage (Cloudflare R2 recommended — zero egress fees) |
+| `vercel` CLI | Local development and project linking |
+
+## Required Secrets
+
+Set these in your fork's GitHub repository under **Settings → Secrets and variables → Actions**:
+
+| Secret | Description |
+|--------|-------------|
+| `VERCEL_TOKEN` | Vercel API token — create at [vercel.com/account/tokens](https://vercel.com/account/tokens) |
+| `VERCEL_ORG_ID` | Your Vercel team or personal account ID — found in `vercel link` output or team settings |
+| `VERCEL_PROJECT_ID` | Project ID after running `vercel link` — found in `.vercel/project.json` |
+| `TURSO_DATABASE_URL` | Turso database URL, e.g. `libsql://your-db.turso.io` |
+| `BETTER_AUTH_URL` | Your Vercel deployment URL, e.g. `https://your-app.vercel.app` |
+
+### Optional Secrets
+
+| Secret | Description |
+|--------|-------------|
+| `TURSO_AUTH_TOKEN` | Turso auth token — create with `turso db tokens create your-db`. Required for remote `libsql://` URLs; can be omitted for local `file://` databases. |
+| `BETTER_AUTH_SECRET` | Signing secret for auth sessions. If not provided, the workflow generates one on first deploy and persists it in your Vercel project environment. Back it up from the Vercel dashboard before rotating. To bring your own: `openssl rand -base64 32`. |
+| `TRUSTED_ORIGINS` | Comma-separated list of additional trusted origins for auth cookies. |
+
+## Quick Start
+
+<Steps>
+  <Step title="Fork the repository">
+    Go to [github.com/saltbo/zpan](https://github.com/saltbo/zpan) and click **Fork**.
+  </Step>
+
+  <Step title="Create a Turso database">
+    ```bash
+    turso db create zpan-db
+    turso db show zpan-db --url    # → TURSO_DATABASE_URL
+    turso db tokens create zpan-db # → TURSO_AUTH_TOKEN
+    ```
+  </Step>
+
+  <Step title="Link your Vercel project">
+    Run the following commands locally (first time only). This creates the Vercel project and generates the IDs you need for the GitHub secrets:
+
+    ```bash
+    cp deploy/vercel/vercel.json vercel.json
+    pnpm exec vercel link
+    # Note VERCEL_ORG_ID and VERCEL_PROJECT_ID from .vercel/project.json
+    ```
+  </Step>
+
+  <Step title="Add GitHub Secrets">
+    In your fork, go to **Settings → Secrets and variables → Actions** and add all required secrets from the tables above. `BETTER_AUTH_SECRET` is optional — the workflow auto-generates one on first deploy and stores it in your Vercel project environment.
+  </Step>
+
+  <Step title="Push to main">
+    Push any commit to `main` — the `deploy-vercel.yml` workflow runs automatically and deploys to production. You can also trigger it manually from the **Actions** tab.
+  </Step>
+
+  <Step title="Configure storage">
+    Open the deployed URL, register your first account (it becomes the admin), then go to **Admin → Storages → Add storage** to configure your S3-compatible bucket.
+  </Step>
+</Steps>
+
+## Local Development
+
+Install the Vercel CLI and run ZPan locally against a local libSQL file:
+
+```bash
+pnpm add --global vercel
+cp deploy/vercel/vercel.json vercel.json
+
+# Local libSQL file — no Turso token needed
+TURSO_DATABASE_URL=file:./zpan.db \
+BETTER_AUTH_SECRET=$(openssl rand -base64 32) \
+vercel dev
+```
+
+The app will be available at `http://localhost:3000`.
+
+## Build Output
+
+`pnpm build:vercel` produces the following artifacts:
+
+| Path | Contents |
+|------|---------|
+| `dist/` | React SPA static assets served from Vercel's CDN |
+| `api/entry-vercel.js` | Hono API compiled as a Vercel Function (ESM, Node.js 22) |
+
+### vercel.json routing
+
+The `vercel.json` file (copied from `deploy/vercel/vercel.json`) configures the following rewrites:
+
+| Pattern | Destination |
+|---------|-------------|
+| `/api/*` | Vercel Function (`api/entry-vercel`) |
+| `/health` | Vercel Function (`api/entry-vercel`) |
+| All other paths | `dist/index.html` (SPA fallback) |
+
+The function is configured with 512 MB memory and a 30-second maximum duration.
+
+## Entitlement Refresh
+
+ZPan refreshes its entitlement certificate every 6 hours and syncs metered traffic every 10 minutes. Vercel has no persistent background process, so you need to drive these calls via Vercel Cron Jobs.
+
+### Setup
+
+<Steps>
+  <Step title="Generate a secret">
+    ```bash
+    openssl rand -hex 32
+    ```
+  </Step>
+
+  <Step title="Add environment variables">
+    Add the following to your Vercel project (**Project → Settings → Environment Variables**):
+
+    | Variable | Value |
+    |----------|-------|
+    | `REFRESH_CRON_SECRET` | The random string from the previous step |
+    | `CRON_SECRET` | The **same** value — Vercel sends this as the scheduler Bearer token automatically |
+  </Step>
+
+  <Step title="Add cron configuration to vercel.json">
+    Add a `crons` entry to your `vercel.json`:
+
+    ```json
+    {
+      "crons": [
+        {
+          "path": "/api/internal/licensing/refresh-runs",
+          "schedule": "0 */6 * * *"
+        },
+        {
+          "path": "/api/internal/traffic-sync-runs",
+          "schedule": "*/10 * * * *"
+        }
+      ]
+    }
+    ```
+  </Step>
+</Steps>
+
+Vercel automatically sends the `CRON_SECRET` value as the `Authorization: Bearer` header for cron-triggered requests. If `REFRESH_CRON_SECRET` is not set, both endpoints return `401` for all requests.
+
+## Pricing Notes
+
+| Plan | Cost | Notes |
+|------|------|-------|
+| Hobby (free) | $0/mo | Suitable for personal and non-commercial use. 100 GB-hours of function compute per month. |
+| Pro | $20/mo | Required for commercial use per Vercel's [fair-use policy](https://vercel.com/docs/limits/fair-use-policy). Includes team features, higher limits, and SLA. |
+| Turso | Free | Free tier: 500 databases, 9 GB total storage, 1 B row reads per month. |
+| Cloudflare R2 | Free egress | Recommended S3-compatible storage — zero egress fees globally, 10 GB storage free. |

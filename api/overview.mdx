@@ -1,0 +1,118 @@
+---
+title: "ZPan REST API Overview and Discovery"
+sidebarTitle: "Overview"
+description: "ZPan exposes a REST API at /api with OpenAPI documentation at /api/openapi.json. Covers base URL, versioning, response format, error envelope, and discovery endpoints."
+---
+
+ZPan exposes a JSON REST API rooted at `/api`. Every response body follows a consistent envelope, every error uses the same AIP-193 `Error` schema, and every request receives a `Request-Id` header for support correlation. The machine-readable OpenAPI document and Arazzo upload workflow descriptor are served from the API itself, so SDKs and automation tools can discover contracts without consulting external registries.
+
+## Base URL
+
+```
+https://your-zpan.example/api
+```
+
+Replace `your-zpan.example` with the hostname of your ZPan deployment. All paths in this reference are relative to this base unless noted otherwise.
+
+## Response Format
+
+All responses use `Content-Type: application/json`. Successful responses return the resource or a page envelope at the top level. Every response — success or failure — includes a `Request-Id` header that uniquely identifies the server-side request; include this value in support requests.
+
+### Error Envelope
+
+Errors follow the [AIP-193](https://google.aip.dev/193) `google.rpc.Status` model. The top-level key is always `error`:
+
+```json
+{
+  "error": {
+    "code": 422,
+    "message": "Storage quota exceeded.",
+    "status": "RESOURCE_EXHAUSTED",
+    "details": [
+      {
+        "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+        "reason": "QUOTA_EXCEEDED",
+        "domain": "zpan.dev",
+        "metadata": {}
+      }
+    ]
+  }
+}
+```
+
+<ResponseField name="error.code" type="integer" required>
+  The HTTP status code repeated inside the body for clients that cannot inspect HTTP headers.
+</ResponseField>
+
+<ResponseField name="error.message" type="string" required>
+  A developer-facing English description of the failure.
+</ResponseField>
+
+<ResponseField name="error.status" type="string" required>
+  A canonical `google.rpc.Code` name such as `INVALID_ARGUMENT`, `NOT_FOUND`, `RESOURCE_EXHAUSTED`, or `PERMISSION_DENIED`.
+</ResponseField>
+
+<ResponseField name="error.details" type="array">
+  Optional array of `ErrorInfo` objects. Each entry contains a stable `reason` field (UPPER\_SNAKE\_CASE) you can switch on in client code, a `domain` of `zpan.dev`, and optional string-keyed `metadata`.
+</ResponseField>
+
+## Pagination
+
+List endpoints use keyset-based opaque page tokens. Pass the `cursor` (or `pageToken`) query parameter from the previous response's `nextPageToken` to fetch the next page. A `null` or absent `nextPageToken` means there are no more results.
+
+<ParamField query="cursor" type="string">
+  Opaque page token returned by the previous list response. Omit for the first page.
+</ParamField>
+
+<ParamField query="pageSize" type="integer">
+  Number of items per page. Defaults vary by endpoint; the maximum is typically 100.
+</ParamField>
+
+## Authentication
+
+ZPan supports three authentication methods:
+
+| Method | How to use |
+|---|---|
+| Bearer API key | `Authorization: Bearer zpk_…` |
+| Session cookie | Set automatically by the browser SPA on login |
+| OAuth 2.1 DPoP token | For external application integrations |
+
+See the [Authentication](/api/authentication) page for full details on creating API keys and using OAuth flows.
+
+## Rate Limiting
+
+WebDAV endpoints are limited to 3600 requests per 60-second window per credential. The REST API does not currently enforce a hard rate limit but may return `429 Too Many Requests` during periods of elevated load. Respect `Retry-After` headers when present.
+
+## Discovery Endpoints
+
+The following endpoints let you discover API contracts programmatically without hard-coding paths.
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api` | API root discovery document |
+| `GET` | `/api/openapi.json` | Full OpenAPI 3.1 document for the REST API |
+| `GET` | `/api/workflows.arazzo.json` | Arazzo workflow descriptor for the three-step file upload protocol |
+| `GET` | `/.well-known/oauth-authorization-server/api/auth` | OAuth 2.1 authorization server metadata (RFC 8414) |
+| `GET` | `/.well-known/oauth-protected-resource/api` | OAuth 2.1 protected resource metadata (RFC 9728) |
+| `GET` | `/.well-known/agent-skills/index.json` | Agent skills index for AI integrations |
+
+<Tip>
+  Fetch `/api/openapi.json` to generate typed SDKs with tools like `openapi-typescript`, `hey-api`, or `fern`. The document is always in sync with the deployed server version.
+</Tip>
+
+## OpenAPI Document
+
+```bash
+curl https://your-zpan.example/api/openapi.json
+```
+
+The document covers all authenticated endpoints, request/response schemas, security requirements, and operation IDs. All schemas are named — `Matter`, `ShareView`, `DownloadTask`, etc. — so generated client types are stable across versions.
+
+## Upload Workflow Descriptor
+
+```bash
+curl https://your-zpan.example/api/workflows.arazzo.json
+```
+
+The Arazzo descriptor encodes the full three-step file upload protocol: create draft → PUT parts to presigned URLs → complete upload. Automation clients should resolve operation IDs from this document rather than hard-coding paths. See the [Objects](/api/objects) page for the full upload protocol walkthrough.
